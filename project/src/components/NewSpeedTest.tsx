@@ -54,7 +54,12 @@ const NewSpeedTest: React.FC<NewSpeedTestProps> = ({ onTestComplete }) => {
         parallelConnections: 4,
         enableBufferbloat: true,
         enableStressTest: false,
-        protocol: selectedProtocol
+        protocol: selectedProtocol,
+        enableBrowserOptimizations: true,
+        pingUsePerformanceAPI: true,
+        uploadParallelConnections: 3,
+        enableAutoProtocolOverhead: true,
+        forceIE11Workaround: false
       });
       
       const result = await testEngine.runSpeedTest();

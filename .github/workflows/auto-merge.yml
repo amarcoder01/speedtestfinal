@@ -1,0 +1,108 @@
+name: Auto-Merge Pull Requests
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+  check_suite:
+    types:
+      - completed
+  status: {}
+  pull_request_review:
+    types:
+      - submitted
+
+jobs:
+  auto-merge:
+    name: Auto-Merge Eligible PRs
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]' # Handled separately
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Auto-merge for trusted contributors
+        uses: pascalgn/automerge-action@v0.15.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_LABELS: "auto-merge,!do-not-merge"
+          MERGE_METHOD: "squash"
+          MERGE_COMMIT_MESSAGE: "pull-request-title"
+          MERGE_REQUIRED_APPROVING_REVIEW_COUNT: "1"
+          MERGE_DELETE_BRANCH: "true"
+          MERGE_RETRY_SLEEP: "60000" # 1 minute
+          MERGE_RETRIES: "6" # Retry for 6 minutes
+          UPDATE_LABELS: "auto-merge"
+          UPDATE_METHOD: "rebase"
+
+  dependabot-auto-merge:
+    name: Auto-Merge Dependabot PRs
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Approve and enable auto-merge for patch and minor updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on major updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body "⚠️ This PR contains a **major** version update of a dependency. Please review carefully before merging."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-approve-docs:
+    name: Auto-Approve Documentation PRs
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Check if PR only changes documentation
+        id: check-docs-only
+        run: |
+          # Get the list of changed files
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD)
+          
+          # Check if all changed files are documentation
+          DOCS_ONLY=true
+          for FILE in $CHANGED_FILES; do
+            # Check if file is a documentation file
+            if [[ ! $FILE =~ \.(md|txt|rst)$ ]] && [[ ! $FILE =~ ^docs/ ]]; then
+              DOCS_ONLY=false
+              break
+            fi
+          done
+          
+          echo "docs_only=$DOCS_ONLY" >> $GITHUB_OUTPUT
+
+      - name: Auto-approve documentation changes
+        if: steps.check-docs-only.outputs.docs_only == 'true'
+        run: |
+          gh pr review "$PR_URL" --approve --body "✅ Automatically approved documentation-only changes."
+          gh pr edit "$PR_URL" --add-label "auto-merge"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

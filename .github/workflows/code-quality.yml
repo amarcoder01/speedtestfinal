@@ -1,0 +1,100 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        npm ci
+        cd backend && npm ci
+        cd ../project && npm ci
+
+    - name: Lint frontend
+      run: |
+        cd project
+        npm run lint
+
+    - name: Install ESLint for backend
+      run: |
+        cd backend
+        npm install --save-dev eslint eslint-plugin-node
+        echo '{
+          "extends": ["eslint:recommended", "plugin:node/recommended"],
+          "rules": {
+            "node/exports-style": ["error", "module.exports"],
+            "node/file-extension-in-import": ["error", "always"],
+            "node/prefer-global/buffer": ["error", "always"],
+            "node/prefer-global/console": ["error", "always"],
+            "node/prefer-global/process": ["error", "always"],
+            "node/prefer-global/url-search-params": ["error", "always"],
+            "node/prefer-global/url": ["error", "always"],
+            "node/prefer-promises/dns": "error",
+            "node/prefer-promises/fs": "error"
+          }
+        }' > .eslintrc.json
+
+    - name: Lint backend
+      run: |
+        cd backend
+        npx eslint .
+
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install Prettier
+      run: npm install --global prettier
+
+    - name: Check formatting
+      run: |
+        prettier --check "project/src/**/*.{js,jsx,ts,tsx,css,scss,json}"
+        prettier --check "backend/**/*.js"
+
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      with:
+        args: >
+          -Dsonar.projectKey=speedtest-app
+          -Dsonar.organization=speedtest-org
+          -Dsonar.sources=project/src,backend
+          -Dsonar.javascript.lcov.reportPaths=project/coverage/lcov.info
+          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/coverage/**

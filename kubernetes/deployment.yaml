@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speedtest-app
+  labels:
+    app: speedtest-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: speedtest-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: speedtest-app
+    spec:
+      containers:
+      - name: speedtest-app
+        image: ${DOCKER_USERNAME}/speedtest-pro:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: backend
+        - containerPort: 5000
+          name: frontend
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: ENABLE_CLUSTER
+          value: "true"
+        - name: RATE_LIMIT_WINDOW_MS
+          value: "60000"
+        - name: RATE_LIMIT_MAX_REQUESTS
+          value: "100"
+        - name: KEEP_ALIVE_TIMEOUT
+          value: "65000"
+        - name: HEADERS_TIMEOUT
+          value: "66000"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: logs
+        persistentVolumeClaim:
+          claimName: speedtest-logs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speedtest-backend
+spec:
+  selector:
+    app: speedtest-app
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: backend
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speedtest-frontend
+spec:
+  selector:
+    app: speedtest-app
+  ports:
+  - port: 80
+    targetPort: 5000
+    name: frontend
+  type: LoadBalancer
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: speedtest-logs-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard

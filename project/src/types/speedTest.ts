@@ -29,6 +29,15 @@ export interface SpeedTestResult {
     detected: boolean;
     factor: number;
     overheadPercentage: number;
+    detectionMode?: 'fixed' | 'dynamic' | 'auto';
+    percentage?: string;
+  };
+  testConfig?: {
+    gracePeriodEnabled?: boolean;
+    downloadGracePeriod?: number;
+    uploadGracePeriod?: number;
+    dynamicDurationEnabled?: boolean;
+    protocolOverheadFactor?: number;
   };
 }
 
@@ -63,10 +72,18 @@ export enum TestProtocol {
 export interface TestConfig {
   duration: number;
   parallelConnections: number;
+  uploadParallelConnections?: number; // Separate control for upload connections
   enableBufferbloat: boolean;
   enableStressTest: boolean;
   enableAutoProtocolOverhead?: boolean;
+  protocolOverheadFactor?: number; // Manual protocol overhead factor (1.0 = no overhead)
+  enableBrowserOptimizations?: boolean; // Enable/disable browser-specific optimizations
+  forceIE11Workaround?: boolean; // Force IE11/Safari upload workaround
+  pingUsePerformanceAPI?: boolean; // Whether to use Performance API for ping measurements
   protocol?: TestProtocol;
+  enableDynamicDuration?: boolean; // Enable dynamic test duration (shorter for faster connections)
+  tcpGracePeriod?: number; // Grace period in seconds to exclude TCP slow-start
+  enableDynamicGracePeriod?: boolean; // Enable dynamic grace period based on connection speed
 }
 
 export interface NetworkStabilityData {

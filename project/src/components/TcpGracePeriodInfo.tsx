@@ -28,7 +28,7 @@ const TcpGracePeriodInfo: React.FC<TcpGracePeriodInfoProps> = ({ onClose }) => {
             <div className="p-2 bg-blue-100 rounded-full">
               <Activity className="w-5 h-5 text-blue-600" />
             </div>
-            <h2 className="text-xl font-bold text-gray-800">TCP Grace Period Explained</h2>
+            <h2 className="text-xl font-bold text-gray-800">Advanced Test Settings Explained</h2>
           </div>
           <button
             onClick={onClose}
@@ -81,6 +81,28 @@ const TcpGracePeriodInfo: React.FC<TcpGracePeriodInfoProps> = ({ onClose }) => {
           </div>
 
           <div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Dynamic Test Duration</h3>
+            <p className="text-gray-600">
+              We've implemented a dynamic test duration feature inspired by LibreSpeed that automatically adjusts the test length based on your connection speed:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-gray-600">
+              <li><strong>Fast connections:</strong> Tests complete more quickly, as sufficient data is collected faster.</li>
+              <li><strong>Slow connections:</strong> Tests run for the full configured duration to ensure accurate measurements.</li>
+            </ul>
+            <p className="text-gray-600 mt-2">
+              This approach provides several benefits:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-gray-600">
+              <li>Faster overall test experience for users with high-speed connections</li>
+              <li>Reduced data usage without sacrificing measurement accuracy</li>
+              <li>More efficient server resource utilization</li>
+            </ul>
+            <p className="text-gray-600 mt-2">
+              The test will always run for at least half of the configured duration, ensuring reliable results even with dynamic adjustments.
+            </p>
+          </div>
+
+          <div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Manual Adjustment</h3>
             <p className="text-gray-600">
               You can also manually adjust the grace period using the slider in the test settings:
@@ -95,8 +117,11 @@ const TcpGracePeriodInfo: React.FC<TcpGracePeriodInfoProps> = ({ onClose }) => {
           <div className="bg-blue-50 p-4 rounded-lg">
             <h3 className="text-md font-semibold text-blue-800 mb-2">Technical Note</h3>
             <p className="text-blue-700 text-sm">
-              During the grace period, the test is still running and transferring data, but these initial measurements 
-              are excluded from the final speed calculation. This ensures that only the steady-state performance is reported.
+              During the grace period, the test is still running and transferring data. When the grace period ends, 
+              we completely reset all byte counters (both measured and total bytes), following the LibreSpeed approach. 
+              This ensures that only the steady-state performance is reported and that no data transferred during 
+              the TCP slow-start phase affects the final speed calculation. This complete reset approach provides more 
+              accurate measurements by ensuring we only measure performance after the connection has fully stabilized.
             </p>
           </div>
         </div>

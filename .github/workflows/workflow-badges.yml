@@ -1,0 +1,159 @@
+name: Workflow Status Badges
+
+on:
+  workflow_run:
+    workflows: ['*']
+    types: [completed]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  generate-badges:
+    name: Generate Workflow Status Badges
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install @octokit/rest badge-maker
+
+      - name: Generate workflow badges
+        id: generate-badges
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { Octokit } = require('@octokit/rest');
+            const { makeBadge } = require('badge-maker');
+            const fs = require('fs');
+            const path = require('path');
+            
+            const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            // Get all workflows
+            const { data: workflows } = await octokit.actions.listRepoWorkflows({
+              owner,
+              repo,
+            });
+            
+            // Create badges directory if it doesn't exist
+            const badgesDir = path.join('.', 'badges');
+            if (!fs.existsSync(badgesDir)) {
+              fs.mkdirSync(badgesDir, { recursive: true });
+            }
+            
+            // Generate badges for each workflow
+            for (const workflow of workflows.workflows) {
+              // Get the latest run for this workflow
+              const { data: runs } = await octokit.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: workflow.id,
+                per_page: 1,
+              });
+              
+              let status = 'unknown';
+              let color = 'lightgrey';
+              
+              if (runs.total_count > 0) {
+                const latestRun = runs.workflow_runs[0];
+                status = latestRun.conclusion || latestRun.status;
+                
+                // Set color based on status
+                switch (status) {
+                  case 'success':
+                    color = 'brightgreen';
+                    break;
+                  case 'failure':
+                    color = 'red';
+                    break;
+                  case 'cancelled':
+                    color = 'yellow';
+                    break;
+                  case 'skipped':
+                    color = 'blue';
+                    break;
+                  case 'in_progress':
+                  case 'queued':
+                  case 'requested':
+                  case 'waiting':
+                    status = 'running';
+                    color = 'blue';
+                    break;
+                  default:
+                    color = 'lightgrey';
+                }
+              }
+              
+              // Create badge
+              const badgeOptions = {
+                label: workflow.name,
+                message: status,
+                color: color,
+                style: 'flat'
+              };
+              
+              const svgBadge = makeBadge(badgeOptions);
+              
+              // Sanitize workflow name for filename
+              const safeWorkflowName = workflow.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+              const badgeFilename = `${safeWorkflowName}.svg`;
+              
+              // Write badge to file
+              fs.writeFileSync(path.join(badgesDir, badgeFilename), svgBadge);
+              console.log(`Generated badge for ${workflow.name}: ${status}`);
+            }
+            
+            // Generate overall status badge
+            const allSuccessful = workflows.workflows.every(workflow => {
+              const workflowFile = path.join(badgesDir, `${workflow.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}.svg`);
+              return fs.existsSync(workflowFile) && fs.readFileSync(workflowFile, 'utf8').includes('brightgreen');
+            });
+            
+            const overallBadgeOptions = {
+              label: 'CI/CD',
+              message: allSuccessful ? 'passing' : 'failing',
+              color: allSuccessful ? 'brightgreen' : 'red',
+              style: 'flat'
+            };
+            
+            const overallSvgBadge = makeBadge(overallBadgeOptions);
+            fs.writeFileSync(path.join(badgesDir, 'overall-status.svg'), overallSvgBadge);
+            
+            // Generate markdown for README
+            const badgeMarkdown = `## Workflow Status
+
+![Overall CI/CD Status](./badges/overall-status.svg)
+
+| Workflow | Status |
+|----------|--------|
+${workflows.workflows.map(workflow => {
+  const safeWorkflowName = workflow.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  return `| ${workflow.name} | ![${workflow.name}](./badges/${safeWorkflowName}.svg) |`;
+}).join('\n')}
+
+*Last updated: ${new Date().toISOString()}*
+`;
+            
+            fs.writeFileSync(path.join(badgesDir, 'README.md'), badgeMarkdown);
+            console.log('Generated badge markdown for README');
+
+      - name: Commit and push badges
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add badges/
+          git commit -m "chore: update workflow status badges" || echo "No changes to commit"
+          git push

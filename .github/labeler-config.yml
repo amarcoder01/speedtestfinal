@@ -1,0 +1,67 @@
+# Configuration for PR Labeler
+# Add 'component' labels based on the modified files
+
+component/frontend:
+  - project/**/*
+  - project/*
+
+component/backend:
+  - backend/**/*
+  - backend/*
+
+component/infrastructure:
+  - Dockerfile
+  - docker-compose.yml
+  - kubernetes/**/*
+  - helm/**/*
+  - render.yaml
+
+component/ci-cd:
+  - .github/workflows/**/*
+
+component/dependencies:
+  - package.json
+  - package-lock.json
+  - yarn.lock
+  - backend/package.json
+  - backend/package-lock.json
+  - project/package.json
+  - project/package-lock.json
+
+component/documentation:
+  - '**/*.md'
+  - docs/**/*
+
+component/tests:
+  - '**/*.test.js'
+  - '**/*.test.ts'
+  - '**/*.test.jsx'
+  - '**/*.test.tsx'
+  - '**/*.spec.js'
+  - '**/*.spec.ts'
+  - '**/*.spec.jsx'
+  - '**/*.spec.tsx'
+  - project/cypress/**/*
+  - backend/test/**/*
+
+component/config:
+  - '**/*.json'
+  - '**/*.yaml'
+  - '**/*.yml'
+  - '**/*.config.js'
+  - '**/*.config.ts'
+  - .env.example
+
+priority/high:
+  - backend/src/controllers/**/*
+  - backend/src/routes/**/*
+  - backend/src/middleware/auth.js
+  - project/src/pages/**/*
+  - project/src/components/Auth/**/*
+
+priority/security:
+  - backend/src/middleware/auth.js
+  - backend/src/utils/jwt.js
+  - backend/src/controllers/auth.js
+  - project/src/utils/auth.js
+  - project/src/context/AuthContext.js

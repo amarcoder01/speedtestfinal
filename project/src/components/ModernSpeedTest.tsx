@@ -49,7 +49,12 @@ const ModernSpeedTest: React.FC<ModernSpeedTestProps> = ({ onTestComplete }) => 
         duration: 10,
         parallelConnections: 4,
         enableBufferbloat: true,
-        enableStressTest: false
+        enableStressTest: false,
+        enableBrowserOptimizations: true,
+        pingUsePerformanceAPI: true,
+        uploadParallelConnections: 3,
+        enableAutoProtocolOverhead: true,
+        forceIE11Workaround: false
       });
       
       const result = await testEngine.runSpeedTest();

@@ -32,6 +32,13 @@ interface WebSocketServiceConfig {
   reconnectAttempts?: number;
   reconnectInterval?: number;
   debug?: boolean;
+  testConfig?: {
+    protocolOverheadFactor?: number;
+    gracePeriodEnabled?: boolean;
+    enableDynamicGracePeriod?: boolean;
+    enableDynamicDuration?: boolean;
+    duration?: number;
+  };
 }
 
 // Progress update callback type
@@ -53,6 +60,20 @@ class WebSocketService {
   private testComplete = false;
   private testData: Partial<SpeedTestResult> = {};
   private debug: boolean;
+  
+  // Grace period and measurement variables
+  private inGracePeriod = true;
+  private gracePeriodMs = 2000; // Default 2 seconds
+  private totalBytesReceived = 0;
+  private measuredBytesReceived = 0;
+  private measurementStartTime = 0;
+  private enableDynamicGracePeriod = true;
+  private enableDynamicDuration = true;
+  private earlySpeedSamples: number[] = [];
+  private lastSpeedCheck = 0;
+  private bonusT = 0; // Time adjustment for dynamic duration
+  private testDuration = 10; // Default 10 seconds
+  private protocolOverheadFactor = 1.06; // Default LibreSpeed value
 
   constructor(config: WebSocketServiceConfig) {
     this.config = {
@@ -62,6 +83,34 @@ class WebSocketService {
       ...config
     };
     this.debug = this.config.debug || false;
+    
+    // Initialize grace period and protocol overhead settings from config
+    if (config.testConfig) {
+      // Set protocol overhead factor
+      if (config.testConfig.protocolOverheadFactor !== undefined) {
+        this.protocolOverheadFactor = config.testConfig.protocolOverheadFactor;
+      }
+      
+      // Set grace period settings
+      if (config.testConfig.gracePeriodEnabled !== undefined) {
+        this.inGracePeriod = config.testConfig.gracePeriodEnabled;
+      }
+      
+      // Set dynamic grace period settings
+      if (config.testConfig.enableDynamicGracePeriod !== undefined) {
+        this.enableDynamicGracePeriod = config.testConfig.enableDynamicGracePeriod;
+      }
+      
+      // Set dynamic duration settings
+      if (config.testConfig.enableDynamicDuration !== undefined) {
+        this.enableDynamicDuration = config.testConfig.enableDynamicDuration;
+      }
+      
+      // Set test duration
+      if (config.testConfig.duration) {
+        this.testDuration = config.testConfig.duration;
+      }
+    }
   }
 
   // Connect to WebSocket server
@@ -289,19 +338,104 @@ class WebSocketService {
   // Handle download progress updates
   private handleDownloadProgress(message: any): void {
     if (this.progressCallback && this.testPhase === 'download') {
+      const now = Date.now();
+      const elapsedTime = (now - this.testStartTime) / 1000;
+      
+      // Update total bytes received
+      this.totalBytesReceived = message.bytesSent;
+      
+      // Check if we're in grace period
+      if (this.inGracePeriod) {
+        // Collect early speed samples for dynamic grace period
+        if (elapsedTime > 0.5 && now - this.lastSpeedCheck > 200) { // Check every 200ms after 0.5s
+          const earlySpeed = (this.totalBytesReceived * 8) / elapsedTime / 1000000;
+          this.earlySpeedSamples.push(earlySpeed);
+          this.lastSpeedCheck = now;
+          
+          // Dynamic grace period adjustment
+          if (this.enableDynamicGracePeriod && this.earlySpeedSamples.length >= 3) {
+            // Calculate average of early samples
+            const avgEarlySpeed = this.earlySpeedSamples.reduce((a, b) => a + b, 0) / this.earlySpeedSamples.length;
+            
+            // Adjust grace period based on early speed (similar to LibreSpeed)
+            if (avgEarlySpeed < 1) { // Less than 1 Mbps
+              this.gracePeriodMs = Math.min(3000, this.gracePeriodMs + 1000); // Extend to max 3s
+              this.log(`Slow connection detected (${avgEarlySpeed.toFixed(2)} Mbps), extending grace period to ${this.gracePeriodMs}ms`);
+            }
+          }
+        }
+        
+        // Check if grace period has ended
+        if (elapsedTime >= this.gracePeriodMs / 1000) {
+          this.inGracePeriod = false;
+          this.totalBytesReceived = 0; // Reset counter after grace period
+          this.measurementStartTime = now;
+          this.log('Download grace period ended, starting measurement');
+        }
+      }
+      
       // Calculate current speed in Mbps
-      const elapsedTime = (Date.now() - this.testStartTime) / 1000;
-      const currentSpeed = ((message.bytesSent * 8) / elapsedTime / 1000000);
-
-      this.progressCallback('download', parseFloat(message.progress), currentSpeed);
+      let currentSpeed;
+      if (!this.inGracePeriod) {
+        const measuredTime = (now - this.measurementStartTime) / 1000;
+        if (measuredTime > 0) {
+          // Apply protocol overhead factor
+          currentSpeed = (this.totalBytesReceived * 8 * this.protocolOverheadFactor) / measuredTime / 1000000;
+          
+          // Dynamic test duration adjustment (similar to LibreSpeed)
+          if (this.enableDynamicDuration && measuredTime > 1) {
+            // LibreSpeed formula: bonusT = 1.0 - 0.5 * Math.pow(Math.log10(currentSpeed + 1), 2);
+            this.bonusT = Math.max(0, 1.0 - 0.5 * Math.pow(Math.log10(currentSpeed + 1), 2));
+          }
+        } else {
+          currentSpeed = 0;
+        }
+      } else {
+        // During grace period, show raw speed
+        currentSpeed = (this.totalBytesReceived * 8) / elapsedTime / 1000000;
+      }
+      
+      // Update progress
+      let progress;
+      if (this.inGracePeriod) {
+        // During grace period, progress is based on grace period duration
+        progress = Math.min((elapsedTime / (this.gracePeriodMs / 1000)) * 50, 50); // Max 50% during grace period
+      } else {
+        // After grace period, progress is based on test duration
+        const measuredTime = (now - this.measurementStartTime) / 1000;
+        const adjustedDuration = this.testDuration + this.bonusT;
+        progress = 50 + Math.min((measuredTime / adjustedDuration) * 50, 50); // 50-100%
+      }
+      
+      this.progressCallback('download', progress, currentSpeed);
     }
   }
 
   // Handle download completion
   private handleDownloadComplete(message: any): void {
-    const downloadSpeed = parseFloat(message.throughputMBps) * 8; // Convert to Mbps
+    let downloadSpeed;
+    
+    // If we're using our own measurement (after grace period)
+    if (!this.inGracePeriod && this.measurementStartTime > 0) {
+      const measuredTime = (Date.now() - this.measurementStartTime) / 1000;
+      // Apply protocol overhead factor to get more accurate speed
+      downloadSpeed = (this.totalBytesReceived * 8 * this.protocolOverheadFactor) / measuredTime / 1000000;
+      this.log(`Download measured with grace period: ${downloadSpeed.toFixed(2)} Mbps over ${measuredTime.toFixed(1)}s`);
+    } else {
+      // Fallback to server-reported speed if grace period wasn't completed
+      downloadSpeed = parseFloat(message.throughputMBps) * 8; // Convert to Mbps
+      this.log(`Download using server-reported speed: ${downloadSpeed.toFixed(2)} Mbps`);
+    }
+    
     this.downloadResults.push(downloadSpeed);
     this.testData.download = downloadSpeed;
+    
+    // Add protocol overhead information to test data
+    this.testData.protocolOverhead = {
+      detectionMode: 'fixed', // Using fixed overhead factor
+      factor: this.protocolOverheadFactor,
+      percentage: ((this.protocolOverheadFactor - 1) * 100).toFixed(1) + '%'
+    };
 
     this.log(`Download test complete: ${downloadSpeed.toFixed(2)} Mbps`);
 
@@ -318,23 +452,46 @@ class WebSocketService {
   // Handle upload progress
   private handleUploadProgress(message: any): void {
     if (this.progressCallback && this.testPhase === 'upload') {
+      // This method is now primarily for progress updates, as the actual upload
+      // measurement is handled in startUploadingData with grace period and dynamic duration
+      
+      // We still update the UI based on the server's acknowledgment
+      const now = Date.now();
+      const elapsedTime = (now - this.testStartTime) / 1000;
+      
       // Calculate current speed in Mbps
-      const elapsedTime = (Date.now() - this.testStartTime) / 1000;
-      const currentSpeed = ((message.totalBytesReceived * 8) / elapsedTime / 1000000);
-
-      // Calculate progress based on time (since we don't know total upload size)
-      const progress = Math.min((elapsedTime / 10) * 100, 100); // Assume 10 second test
-
-      this.progressCallback('upload', progress, currentSpeed);
-
-      // If we've been uploading for 10 seconds, finish the test
-      if (elapsedTime >= 10) {
-        this.uploadResults.push(currentSpeed);
-        this.testData.upload = currentSpeed;
-        this.log(`Upload test complete: ${currentSpeed.toFixed(2)} Mbps`);
-
-        // Complete the test
-        this.completeTest();
+      let currentSpeed;
+      let progress;
+      
+      // If we're still in the upload test (not completed by startUploadingData)
+      if (!this.testComplete) {
+        // Get the server-reported bytes
+        const serverReportedBytes = message.totalBytesReceived;
+        
+        // Calculate speed based on grace period state
+        if (this.inGracePeriod) {
+          // During grace period, show raw speed
+          currentSpeed = (serverReportedBytes * 8) / elapsedTime / 1000000;
+          
+          // Progress during grace period (0-50%)
+          progress = Math.min((elapsedTime / (this.gracePeriodMs / 1000)) * 50, 50);
+        } else {
+          // After grace period, use adjusted measurement
+          const measuredTime = (now - this.measurementStartTime) / 1000;
+          if (measuredTime > 0) {
+            // Apply protocol overhead factor
+            currentSpeed = (serverReportedBytes * 8 * this.protocolOverheadFactor) / measuredTime / 1000000;
+          } else {
+            currentSpeed = 0;
+          }
+          
+          // Progress after grace period (50-100%)
+          const adjustedDuration = this.testDuration + this.bonusT;
+          progress = 50 + Math.min((measuredTime / adjustedDuration) * 50, 50);
+        }
+        
+        // Update the UI
+        this.progressCallback('upload', progress, currentSpeed);
       }
     }
   }
@@ -374,10 +531,18 @@ class WebSocketService {
     this.testStartTime = Date.now();
     this.log('Starting download test');
 
+    // Initialize grace period variables
+    this.inGracePeriod = true;
+    this.gracePeriodMs = 2000; // Default 2 seconds
+    this.totalBytesReceived = 0;
+    this.measuredBytesReceived = 0;
+    this.measurementStartTime = 0;
+
     // Request download test
     this.send(MessageType.DOWNLOAD_START, {
       size: 10 * 1024 * 1024, // 10MB
-      chunkSize: 64 * 1024 // 64KB chunks
+      chunkSize: 64 * 1024, // 64KB chunks
+      enableGracePeriod: true
     });
   }
 
@@ -388,9 +553,21 @@ class WebSocketService {
     this.testStartTime = Date.now();
     this.log('Starting upload test');
 
+    // Initialize grace period variables
+    this.inGracePeriod = true;
+    this.gracePeriodMs = 3000; // Default 3 seconds for upload (same as LibreSpeed)
+    this.totalBytesReceived = 0;
+    this.measuredBytesReceived = 0;
+    this.measurementStartTime = 0;
+    this.earlySpeedSamples = [];
+    this.lastSpeedCheck = 0;
+    this.bonusT = 0;
+
     // Request upload test
     this.send(MessageType.UPLOAD_START, {
-      size: 10 * 1024 * 1024 // 10MB
+      size: 10 * 1024 * 1024, // 10MB
+      enableGracePeriod: true,
+      protocolOverheadFactor: this.protocolOverheadFactor
     });
   }
 
@@ -405,20 +582,52 @@ class WebSocketService {
       view[i] = Math.floor(Math.random() * 256);
     }
 
-    // Upload data for 10 seconds
+    // Initialize test variables
     const startTime = Date.now();
-    const uploadDuration = 10000; // 10 seconds
     let totalUploaded = 0;
+    let measuredUploaded = 0;
+    let measurementStartTime = 0;
+    let inGracePeriod = true;
+    
+    // Dynamic test duration (default 10s)
+    const baseDuration = this.testDuration * 1000; // Convert to ms
+    let bonusTime = 0;
 
     const uploadChunk = () => {
-      if (Date.now() - startTime >= uploadDuration) {
+      const now = Date.now();
+      const elapsedTime = (now - startTime) / 1000; // in seconds
+      
+      // Check if we're in grace period
+      if (inGracePeriod && elapsedTime >= this.gracePeriodMs / 1000) {
+        // Grace period ended, reset counters
+        inGracePeriod = false;
+        totalUploaded = 0;
+        measurementStartTime = now;
+        this.log('Upload grace period ended, starting measurement');
+        
+        // If dynamic grace period is enabled, adjust based on early samples
+        if (this.enableDynamicGracePeriod && this.earlySpeedSamples.length > 0) {
+          // Calculate average of early samples
+          const avgEarlySpeed = this.earlySpeedSamples.reduce((a, b) => a + b, 0) / this.earlySpeedSamples.length;
+          
+          // Adjust grace period based on early speed (similar to LibreSpeed)
+          if (avgEarlySpeed < 1) { // Less than 1 Mbps
+            this.log('Slow connection detected, extending grace period');
+            // Already passed grace period, but note for future tests
+          }
+        }
+      }
+      
+      // Check if test duration has elapsed (including bonus time for dynamic duration)
+      if (!inGracePeriod && (now - measurementStartTime) >= (baseDuration + bonusTime)) {
         // Upload test complete
-        const elapsedTime = (Date.now() - startTime) / 1000;
-        const uploadSpeed = (totalUploaded * 8) / elapsedTime / 1000000;
+        const measuredTime = (now - measurementStartTime) / 1000;
+        // Apply protocol overhead factor to get more accurate speed
+        const uploadSpeed = (totalUploaded * 8 * this.protocolOverheadFactor) / measuredTime / 1000000;
         this.uploadResults.push(uploadSpeed);
         this.testData.upload = uploadSpeed;
 
-        this.log(`Upload test complete: ${uploadSpeed.toFixed(2)} Mbps`);
+        this.log(`Upload test complete: ${uploadSpeed.toFixed(2)} Mbps (measured over ${measuredTime.toFixed(1)}s)`);
         this.completeTest();
         return;
       }
@@ -432,6 +641,26 @@ class WebSocketService {
           byteLength: chunkSize,
           totalUploaded
         });
+        
+        // If we're not in grace period, collect speed samples for dynamic duration
+        if (!inGracePeriod && this.enableDynamicDuration) {
+          const measuredTime = (now - measurementStartTime) / 1000;
+          if (measuredTime > 0) {
+            const currentSpeed = (totalUploaded * 8) / measuredTime / 1000000;
+            
+            // Check if we should adjust test duration (similar to LibreSpeed)
+            if (measuredTime > 1) { // Only after 1 second of measurement
+              // LibreSpeed formula: bonusT = 1.0 - 0.5 * Math.pow(Math.log10(currentSpeed + 1), 2);
+              bonusTime = Math.max(0, 1000 * (1.0 - 0.5 * Math.pow(Math.log10(currentSpeed + 1), 2)));
+            }
+            
+            // If in grace period, collect early speed samples
+            if (inGracePeriod && now - this.lastSpeedCheck > 200) { // Check every 200ms
+              this.earlySpeedSamples.push(currentSpeed);
+              this.lastSpeedCheck = now;
+            }
+          }
+        }
 
         // Schedule next chunk
         setTimeout(uploadChunk, 50); // Upload a chunk every 50ms
@@ -460,6 +689,17 @@ class WebSocketService {
         this.progressCallback = progressCallback;
         this.testComplete = false;
         this.testData = {};
+        
+        // Reset test variables
+        this.inGracePeriod = true;
+        this.earlySpeedSamples = [];
+        this.lastSpeedCheck = 0;
+        this.bonusT = 0;
+        
+        // Initialize protocol overhead factor (default to LibreSpeed value)
+        if (!this.protocolOverheadFactor) {
+          this.protocolOverheadFactor = 1.06; // Default LibreSpeed value
+        }
 
         // Connect to WebSocket server if not connected
         if (this.state !== WebSocketState.OPEN) {
@@ -486,12 +726,22 @@ class WebSocketService {
                 location: 'Local',
                 distance: 0
               },
-              protocolOverhead: {
+              protocolOverhead: this.testData.protocolOverhead || {
                 detectionMode: 'fixed',
-                factor: 1.0,
-                percentage: 0
+                factor: this.protocolOverheadFactor,
+                percentage: ((this.protocolOverheadFactor - 1) * 100).toFixed(1) + '%'
               }
             };
+            
+            // Add test configuration details
+            result.testConfig = {
+              gracePeriodEnabled: true,
+              downloadGracePeriod: this.gracePeriodMs / 1000,
+              uploadGracePeriod: 3, // 3 seconds for upload
+              dynamicDurationEnabled: this.enableDynamicDuration,
+              protocolOverheadFactor: this.protocolOverheadFactor
+            };
+            
             resolve(result);
           } else {
             // Check again after a short delay

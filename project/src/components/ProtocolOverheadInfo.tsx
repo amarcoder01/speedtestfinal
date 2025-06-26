@@ -58,10 +58,21 @@ const ProtocolOverheadInfo: React.FC<ProtocolOverheadInfoProps> = ({ onClose }) 
             </section>
 
             <section>
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">Auto-Detection vs. Manual Setting</h3>
+              <p className="text-gray-600">
+                Our speed test offers two ways to handle protocol overhead:
+              </p>
+              <ul className="list-disc pl-5 mt-2 text-gray-600 space-y-1">
+                <li><strong>Auto-Detection (Recommended):</strong> The test analyzes actual network traffic during the download test to calculate the real overhead on your connection. This provides the most accurate results for your specific network conditions.</li>
+                <li><strong>Manual Setting:</strong> Advanced users can disable auto-detection and manually set a specific overhead factor based on their knowledge of their network.</li>
+              </ul>
+            </section>
+
+            <section>
               <h3 className="text-lg font-semibold text-gray-800 mb-2">The Default Factor: 1.06</h3>
               <p className="text-gray-600">
-                Our default compensation factor of 1.06 (representing 6% overhead) is based on typical HTTP/TCP/IP 
-                overhead in modern web traffic. This value accounts for:
+                When auto-detection is disabled or fails to collect enough samples, we use a default compensation factor of 1.06 (representing 6% overhead). This value is based on typical HTTP/TCP/IP 
+                overhead in modern web traffic and accounts for:
               </p>
               <ul className="list-disc pl-5 mt-2 text-gray-600 space-y-1">
                 <li>TCP headers (20 bytes per packet)</li>
@@ -73,13 +84,14 @@ const ProtocolOverheadInfo: React.FC<ProtocolOverheadInfoProps> = ({ onClose }) 
             </section>
 
             <section>
-              <h3 className="text-lg font-semibold text-gray-800 mb-2">Adjusting the Factor</h3>
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">Manually Adjusting the Factor</h3>
               <p className="text-gray-600">
-                You can adjust the compensation factor based on your specific network conditions and usage patterns:
+                Advanced users can manually adjust the compensation factor based on specific network conditions and usage patterns:
               </p>
               <ul className="list-disc pl-5 mt-2 text-gray-600 space-y-1">
-                <li><strong>Higher values (e.g., 1.10):</strong> For networks with more overhead, such as those with high packet loss or using VPNs</li>
-                <li><strong>Lower values (e.g., 1.03):</strong> For more efficient protocols or optimized connections</li>
+                <li><strong>Higher values (e.g., 1.10-1.20):</strong> For networks with more overhead, such as those with high packet loss, using VPNs, or satellite connections</li>
+                <li><strong>Medium values (e.g., 1.05-1.08):</strong> For typical broadband connections (our default range)</li>
+                <li><strong>Lower values (e.g., 1.01-1.04):</strong> For more efficient protocols or optimized connections</li>
                 <li><strong>1.00:</strong> No compensation (raw data transfer rate)</li>
               </ul>
             </section>

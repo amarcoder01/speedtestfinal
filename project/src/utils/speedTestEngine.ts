@@ -1,16 +1,14 @@
+import { startSpeedTest, abortSpeedTest, getSpeedTestStatus, terminateSpeedTest } from './speedTestWorker';
 import { TestProgress, SpeedTestResult, TestServer, GraphData, TestConfig, TestProtocol } from '../types/speedTest';
-import { WorkerMessageType, WorkerMessage } from './speedTestWorker';
+
+// Set this to the base URL where the competitor's backend is hosted
+const COMPETITOR_BACKEND_BASE = 'http://localhost:8080/speedtest-master/backend/';
 
 class SpeedTestEngine {
-  private servers: TestServer[] = [
-    { id: '1', name: 'Local Server', location: 'Custom Backend', host: 'http://localhost:3000', distance: 0 },
-  ];
-
   private onProgress?: (progress: TestProgress) => void;
   private onGraphUpdate?: (data: GraphData[]) => void;
-  private graphData: GraphData[] = [];
-  private worker: Worker | null = null;
   private config: TestConfig;
+  private workerActive: boolean = false;
 
   constructor(
     onProgress?: (progress: TestProgress) => void,
@@ -25,118 +23,92 @@ class SpeedTestEngine {
       enableBufferbloat: true,
       enableStressTest: false,
       enableAutoProtocolOverhead: true,
-      protocol: TestProtocol.XHR // Default to XHR protocol
+      protocolOverheadFactor: 1.06,
+      enableBrowserOptimizations: true,
+      pingUsePerformanceAPI: true,
+      uploadParallelConnections: 3,
+      forceIE11Workaround: false,
+      protocol: TestProtocol.XHR,
+      enableDynamicDuration: true,
+      tcpGracePeriod: 2,
+      enableDynamicGracePeriod: true
     };
-    
-    this.initWorker();
   }
 
-  private initWorker() {
-    // Terminate existing worker if it exists
-    if (this.worker) {
-      this.worker.terminate();
+  start() {
+    if (this.workerActive) {
+      this.abort();
     }
-
-    // Create a new worker
-    this.worker = new Worker(new URL('./speedTestWorker.ts', import.meta.url), { type: 'module' });
-    
-    // Set up message handler
-    this.worker.onmessage = this.handleWorkerMessage.bind(this);
-    
-    // Initialize worker with config
-    this.sendMessageToWorker(WorkerMessageType.INITIALIZE, { config: this.config });
-  }
-
-  private handleWorkerMessage(event: MessageEvent<WorkerMessage>) {
-    const { type, payload } = event.data;
-    
-    switch (type) {
-      case WorkerMessageType.PROGRESS_UPDATE:
+    this.workerActive = true;
+    // Inject competitor backend URLs into the settings
+    const workerSettings = {
+      ...this.config,
+      url_dl: COMPETITOR_BACKEND_BASE + 'garbage.php',
+      url_ul: COMPETITOR_BACKEND_BASE + 'empty.php',
+      url_ping: COMPETITOR_BACKEND_BASE + 'empty.php',
+      url_getIp: COMPETITOR_BACKEND_BASE + 'getIP.php',
+    };
+    startSpeedTest(workerSettings, (data: any) => {
+      // Map the worker's output to the expected progress/result format
+      if (data.testState !== undefined) {
+        // Progress update
         if (this.onProgress) {
-          this.onProgress(payload);
+          this.onProgress({
+            phase: this.mapTestStateToPhase(data.testState) as TestProgress['phase'],
+            progress: this.calculateProgress(data),
+            currentSpeed: 0, // Not available from worker data
+            elapsedTime: 0   // Not available from worker data
+          });
         }
-        break;
-        
-      case WorkerMessageType.GRAPH_UPDATE:
-        this.graphData = payload;
-        if (this.onGraphUpdate) {
-          this.onGraphUpdate(this.graphData);
-        }
-        break;
-        
-      case WorkerMessageType.TEST_COMPLETE:
+      }
+      if (data.testState === 4 && this.workerActive) {
+        // Test finished
+        this.workerActive = false;
         if (this.onProgress) {
           this.onProgress({
             phase: 'complete',
             progress: 100,
             currentSpeed: 0,
-            elapsedTime: performance.now()
+            elapsedTime: 0
           });
         }
-        break;
-        
-      case WorkerMessageType.TEST_ERROR:
-        console.error('Speed test error:', payload.message);
-        break;
-        
-      default:
-        console.log('Received message from worker:', type, payload);
-    }
-  }
-
-  private sendMessageToWorker(type: WorkerMessageType, payload?: any) {
-    if (!this.worker) {
-      console.error('Worker not initialized');
-      return;
-    }
-    
-    this.worker.postMessage({ type, payload });
-  }
-
-  async runSpeedTest(): Promise<SpeedTestResult> {
-    return new Promise((resolve, reject) => {
-      if (!this.worker) {
-        reject(new Error('Worker not initialized'));
-        return;
       }
-      
-      // Reset graph data
-      this.graphData = [];
-      
-      // Set up one-time listener for test completion
-      const completeListener = (event: MessageEvent<WorkerMessage>) => {
-        const { type, payload } = event.data;
-        
-        if (type === WorkerMessageType.TEST_COMPLETE) {
-          // Remove this listener once test is complete
-          this.worker?.removeEventListener('message', completeListener);
-          resolve(payload as SpeedTestResult);
-        } else if (type === WorkerMessageType.TEST_ERROR) {
-          // Remove this listener on error
-          this.worker?.removeEventListener('message', completeListener);
-          reject(new Error(payload.message));
-        }
-      };
-      
-      // Add the temporary listener for completion/error
-      this.worker.addEventListener('message', completeListener);
-      
-      // Start the test
-      this.sendMessageToWorker(WorkerMessageType.START_TEST);
     });
   }
 
   abort() {
-    this.sendMessageToWorker(WorkerMessageType.ABORT);
+    abortSpeedTest();
+    this.workerActive = false;
   }
 
+  getStatus() {
+    getSpeedTestStatus();
+  }
 
-  
-  // Clean up resources when the engine is no longer needed
-  dispose() {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
+  terminate() {
+    terminateSpeedTest();
+    this.workerActive = false;
+  }
+
+  private mapTestStateToPhase(testState: number): TestProgress['phase'] {
+    switch (testState) {
+      case 0: return 'idle';
+      case 1: return 'download';
+      case 2: return 'ping';
+      case 3: return 'upload';
+      case 4: return 'complete';
+      default: return 'idle';
+    }
+  }
+
+  private calculateProgress(data: any): number {
+    // Estimate progress based on testState and progress fields
+    switch (data.testState) {
+      case 1: return Math.round((data.dlProgress || 0) * 100);
+      case 2: return Math.round((data.pingProgress || 0) * 100);
+      case 3: return Math.round((data.ulProgress || 0) * 100);
+      case 4: return 100;
+      default: return 0;
     }
   }
 }

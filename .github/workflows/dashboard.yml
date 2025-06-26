@@ -1,0 +1,286 @@
+name: CI/CD Dashboard
+
+on:
+  workflow_run:
+    workflows: ['*']
+    types: [completed]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday at midnight
+  workflow_dispatch:
+
+jobs:
+  update-dashboard:
+    name: Update CI/CD Dashboard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install @octokit/rest chart.js markdown-it
+
+      - name: Generate dashboard data
+        id: dashboard-data
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { Octokit } = require('@octokit/rest');
+            const fs = require('fs');
+            
+            const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            // Get all workflows
+            const { data: workflows } = await octokit.actions.listRepoWorkflows({
+              owner,
+              repo,
+            });
+            
+            // Get recent workflow runs
+            const workflowStats = {};
+            const last30Days = new Date();
+            last30Days.setDate(last30Days.getDate() - 30);
+            
+            for (const workflow of workflows.workflows) {
+              const { data: runs } = await octokit.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: workflow.id,
+                per_page: 100,
+              });
+              
+              const recentRuns = runs.workflow_runs.filter(run => 
+                new Date(run.created_at) > last30Days
+              );
+              
+              const successCount = recentRuns.filter(run => run.conclusion === 'success').length;
+              const failureCount = recentRuns.filter(run => run.conclusion === 'failure').length;
+              const totalRuns = recentRuns.length;
+              
+              workflowStats[workflow.name] = {
+                id: workflow.id,
+                name: workflow.name,
+                path: workflow.path,
+                successCount,
+                failureCount,
+                totalRuns,
+                successRate: totalRuns > 0 ? (successCount / totalRuns * 100).toFixed(2) : 0,
+                lastRun: recentRuns.length > 0 ? recentRuns[0].created_at : null,
+                lastStatus: recentRuns.length > 0 ? recentRuns[0].conclusion : null,
+              };
+            }
+            
+            // Generate HTML dashboard
+            const dashboardHtml = `
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>CI/CD Dashboard - ${repo}</title>
+              <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+              <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 20px; }
+                .workflow-card { margin-bottom: 20px; transition: all 0.3s ease; }
+                .workflow-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.1); }
+                .success-rate { font-size: 24px; font-weight: bold; }
+                .status-success { color: #28a745; }
+                .status-failure { color: #dc3545; }
+                .status-neutral { color: #6c757d; }
+                .dashboard-header { margin-bottom: 30px; }
+                .last-updated { font-style: italic; color: #6c757d; }
+                .chart-container { height: 300px; margin-bottom: 30px; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <div class="dashboard-header">
+                  <h1>CI/CD Dashboard - ${repo}</h1>
+                  <p class="last-updated">Last updated: ${new Date().toLocaleString()}</p>
+                </div>
+                
+                <div class="row">
+                  <div class="col-md-6 chart-container">
+                    <canvas id="successRateChart"></canvas>
+                  </div>
+                  <div class="col-md-6 chart-container">
+                    <canvas id="workflowRunsChart"></canvas>
+                  </div>
+                </div>
+                
+                <h2>Workflow Status</h2>
+                <div class="row">
+                  ${Object.values(workflowStats).map(workflow => `
+                    <div class="col-md-4">
+                      <div class="card workflow-card">
+                        <div class="card-body">
+                          <h5 class="card-title">${workflow.name}</h5>
+                          <p class="success-rate ${workflow.successRate > 80 ? 'status-success' : workflow.successRate > 50 ? 'status-neutral' : 'status-failure'}">
+                            ${workflow.successRate}% Success
+                          </p>
+                          <p>Runs (30 days): ${workflow.totalRuns}</p>
+                          <p>
+                            <span class="status-success">${workflow.successCount} successes</span> / 
+                            <span class="status-failure">${workflow.failureCount} failures</span>
+                          </p>
+                          ${workflow.lastRun ? `
+                            <p>Last run: ${new Date(workflow.lastRun).toLocaleString()}</p>
+                            <p>Status: <span class="${workflow.lastStatus === 'success' ? 'status-success' : 'status-failure'}">
+                              ${workflow.lastStatus || 'Unknown'}
+                            </span></p>
+                          ` : '<p>No recent runs</p>'}
+                          <a href="https://github.com/${owner}/${repo}/actions/workflows/${workflow.path.split('/').pop()}" class="btn btn-sm btn-primary" target="_blank">View Workflow</a>
+                        </div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              
+              <script>
+                // Success Rate Chart
+                const successRateCtx = document.getElementById('successRateChart').getContext('2d');
+                new Chart(successRateCtx, {
+                  type: 'bar',
+                  data: {
+                    labels: ${JSON.stringify(Object.values(workflowStats).map(w => w.name))},
+                    datasets: [{
+                      label: 'Success Rate (%)',
+                      data: ${JSON.stringify(Object.values(workflowStats).map(w => parseFloat(w.successRate)))},
+                      backgroundColor: ${JSON.stringify(Object.values(workflowStats).map(w => 
+                        parseFloat(w.successRate) > 80 ? 'rgba(40, 167, 69, 0.7)' : 
+                        parseFloat(w.successRate) > 50 ? 'rgba(255, 193, 7, 0.7)' : 'rgba(220, 53, 69, 0.7)'
+                      ))},
+                      borderColor: ${JSON.stringify(Object.values(workflowStats).map(w => 
+                        parseFloat(w.successRate) > 80 ? 'rgb(40, 167, 69)' : 
+                        parseFloat(w.successRate) > 50 ? 'rgb(255, 193, 7)' : 'rgb(220, 53, 69)'
+                      ))},
+                      borderWidth: 1
+                    }]
+                  },
+                  options: {
+                    indexAxis: 'y',
+                    plugins: {
+                      title: {
+                        display: true,
+                        text: 'Workflow Success Rates (Last 30 Days)'
+                      },
+                      legend: {
+                        display: false
+                      }
+                    },
+                    scales: {
+                      x: {
+                        beginAtZero: true,
+                        max: 100
+                      }
+                    }
+                  }
+                });
+                
+                // Workflow Runs Chart
+                const workflowRunsCtx = document.getElementById('workflowRunsChart').getContext('2d');
+                new Chart(workflowRunsCtx, {
+                  type: 'bar',
+                  data: {
+                    labels: ${JSON.stringify(Object.values(workflowStats).map(w => w.name))},
+                    datasets: [
+                      {
+                        label: 'Successful Runs',
+                        data: ${JSON.stringify(Object.values(workflowStats).map(w => w.successCount))},
+                        backgroundColor: 'rgba(40, 167, 69, 0.7)',
+                        borderColor: 'rgb(40, 167, 69)',
+                        borderWidth: 1
+                      },
+                      {
+                        label: 'Failed Runs',
+                        data: ${JSON.stringify(Object.values(workflowStats).map(w => w.failureCount))},
+                        backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                        borderColor: 'rgb(220, 53, 69)',
+                        borderWidth: 1
+                      }
+                    ]
+                  },
+                  options: {
+                    plugins: {
+                      title: {
+                        display: true,
+                        text: 'Workflow Runs (Last 30 Days)'
+                      }
+                    },
+                    scales: {
+                      x: {
+                        stacked: true
+                      },
+                      y: {
+                        stacked: true,
+                        beginAtZero: true
+                      }
+                    }
+                  }
+                });
+              </script>
+            </body>
+            </html>
+            `;
+            
+            // Create docs directory if it doesn't exist
+            if (!fs.existsSync('./docs')) {
+              fs.mkdirSync('./docs', { recursive: true });
+            }
+            
+            // Write dashboard HTML
+            fs.writeFileSync('./docs/dashboard.html', dashboardHtml);
+            
+            // Generate markdown summary for README
+            const markdownSummary = `# CI/CD Dashboard
+
+View the [CI/CD Dashboard](https://github.com/${owner}/${repo}/actions/workflows/dashboard.yml) for real-time status of all workflows.
+
+## Workflow Summary (Last 30 Days)
+
+| Workflow | Success Rate | Total Runs | Last Status |
+|----------|--------------|------------|-------------|
+${Object.values(workflowStats).map(w => 
+  `| ${w.name} | ${w.successRate}% | ${w.totalRuns} | ${w.lastStatus || 'N/A'} |`
+).join('\n')}
+
+Last updated: ${new Date().toLocaleString()}
+`;
+            
+            // Write markdown summary
+            fs.writeFileSync('./docs/dashboard.md', markdownSummary);
+            
+            console.log('Dashboard generated successfully!');
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: './docs'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
+
+      - name: Create dashboard summary
+        run: |
+          echo "## CI/CD Dashboard Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The CI/CD dashboard has been updated and deployed to GitHub Pages." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Dashboard](https://github.com/${{ github.repository }}/actions/workflows/dashboard.yml)" >> $GITHUB_STEP_SUMMARY
