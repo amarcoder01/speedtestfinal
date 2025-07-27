@@ -1,0 +1,10 @@
+[
+  {
+    "name": "LibreSpeed Demo",
+    "server": "https://speedtest.fdossena.com/",
+    "dlURL": "garbage.php",
+    "ulURL": "empty.php",
+    "pingURL": "empty.php",
+    "getIpURL": "getIP.php"
+  }
+]

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Download, Upload, Wifi, RotateCcw, Activity, Zap, Share2, FileText, HelpCircle, Loader, AlertTriangle } from 'lucide-react';
+import { Download, Upload, Wifi, RotateCcw, Share2, FileText, HelpCircle, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { SpeedTestResult, TestProgress as TestProgressType } from '../types/speedTest';
+import { SpeedTestResult } from '../types/speedTest';
 import SpeedTestEngine from '../utils/speedTestEngine';
 import ModernShareModal from './ModernShareModal';
 import NetworkSpeedGuide from './NetworkSpeedGuide';
@@ -17,12 +17,7 @@ interface ModernSpeedTestProps {
 const ModernSpeedTest: React.FC<ModernSpeedTestProps> = ({ onTestComplete }) => {
   const navigate = useNavigate();
   const [isTestRunning, setIsTestRunning] = useState(false);
-  const [testProgress, setTestProgress] = useState<TestProgressType>({
-    phase: 'idle',
-    progress: 0,
-    currentSpeed: 0,
-    elapsedTime: 0
-  });
+
   const [testResult, setTestResult] = useState<SpeedTestResult | null>(null);
   const [autoStarted, setAutoStarted] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -30,19 +25,14 @@ const ModernSpeedTest: React.FC<ModernSpeedTestProps> = ({ onTestComplete }) => 
   const [isPdfLoading, setIsPdfLoading] = useState(false);
   const [shouldRedirect, setShouldRedirect] = useState(false);
 
-  const handleProgressUpdate = useCallback((progress: TestProgressType) => {
-    setTestProgress(progress);
+  const handleProgressUpdate = useCallback(() => {
+    // Progress updates are handled by CircularSpeedTest component
   }, []);
 
-  const startTest = async () => {
+  const startTest = useCallback(async () => {
     setIsTestRunning(true);
     setTestResult(null);
-    setTestProgress({
-      phase: 'ping',
-      progress: 0,
-      currentSpeed: 0,
-      elapsedTime: 0
-    });
+
 
     try {
       const testEngine = new SpeedTestEngine(handleProgressUpdate, undefined, {
@@ -77,16 +67,11 @@ const ModernSpeedTest: React.FC<ModernSpeedTestProps> = ({ onTestComplete }) => 
     } finally {
       setIsTestRunning(false);
     }
-  };
+  }, [handleProgressUpdate, onTestComplete]);
 
   const resetTest = () => {
     setTestResult(null);
-    setTestProgress({
-      phase: 'idle',
-      progress: 0,
-      currentSpeed: 0,
-      elapsedTime: 0
-    });
+
     setAutoStarted(false);
     setShouldRedirect(false); // Reset redirect flag
     setTimeout(() => {
@@ -102,7 +87,7 @@ const ModernSpeedTest: React.FC<ModernSpeedTestProps> = ({ onTestComplete }) => 
         startTest();
       }, 1000);
     }
-  }, [autoStarted, isTestRunning, testResult]);
+  }, [autoStarted, isTestRunning, testResult, startTest]);
   
   // Redirect to results page when test is complete
   useEffect(() => {

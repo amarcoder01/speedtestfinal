@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Copy, Check, QrCode, MessageCircle, Mail, Linkedin, Facebook, Download, FileText, Share2, Loader, Twitter } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { X, Copy, Check, Mail, Linkedin, Facebook, Download, Loader, Twitter } from 'lucide-react';
 import { SpeedTestResult } from '../types/speedTest';
 import QRCode from 'qrcode';
 import html2canvas from 'html2canvas';
@@ -112,20 +112,7 @@ const ModernShareModal: React.FC<ModernShareModalProps> = ({ result, onClose }) 
     }
   };
 
-  const copyResultsAsText = async () => {
-    try {
-      setIsLoading(prevState => ({ ...prevState, copy: true }));
-      await navigator.clipboard.writeText(shareText);
-      setCopied(true);
-      toast.success('Results copied to clipboard');
-      setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy results as text:', error);
-      toast.error('Failed to copy results');
-    } finally {
-      setIsLoading(prevState => ({ ...prevState, copy: false }));
-    }
-  };
+
 
   // Define handleShare function that was missing
   const handleShare = (platform: string) => {

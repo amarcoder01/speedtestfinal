@@ -203,7 +203,7 @@ class WebSocketService {
   }
 
   // Send a message to the server
-  private send(type: MessageType, data: any = {}): boolean {
+  private send(type: MessageType, data: Record<string, unknown> = {}): boolean {
     if (!this.socket || this.state !== WebSocketState.OPEN) {
       this.log('Cannot send message, WebSocket is not open');
       return false;
@@ -247,7 +247,7 @@ class WebSocketService {
     if (event.data instanceof ArrayBuffer) {
       if (this.testPhase === 'upload') {
         // For upload test, we receive binary data acknowledgments
-        this.handleUploadAck(event.data);
+        this.handleUploadAck();
       }
       return;
     }
@@ -307,7 +307,7 @@ class WebSocketService {
   }
 
   // Handle pong response for ping measurement
-  private handlePong(message: any): void {
+  private handlePong(message: { clientTimestamp: number; serverProcessingTime: number }): void {
     const roundTripTime = Date.now() - message.clientTimestamp;
     this.pingResults.push(roundTripTime);
     this.log(`Ping: ${roundTripTime}ms (server processing: ${message.serverProcessingTime}ms)`);
@@ -336,7 +336,7 @@ class WebSocketService {
   }
 
   // Handle download progress updates
-  private handleDownloadProgress(message: any): void {
+  private handleDownloadProgress(message: { bytesSent: number }): void {
     if (this.progressCallback && this.testPhase === 'download') {
       const now = Date.now();
       const elapsedTime = (now - this.testStartTime) / 1000;
@@ -412,7 +412,7 @@ class WebSocketService {
   }
 
   // Handle download completion
-  private handleDownloadComplete(message: any): void {
+  private handleDownloadComplete(message: Record<string, unknown>): void {
     let downloadSpeed;
     
     // If we're using our own measurement (after grace period)
@@ -445,12 +445,12 @@ class WebSocketService {
   }
 
   // Handle upload acknowledgments
-  private handleUploadAck(message: any): void {
+  private handleUploadAck(): void {
     // For binary upload acks
   }
 
   // Handle upload progress
-  private handleUploadProgress(message: any): void {
+  private handleUploadProgress(message: Record<string, unknown>): void {
     if (this.progressCallback && this.testPhase === 'upload') {
       // This method is now primarily for progress updates, as the actual upload
       // measurement is handled in startUploadingData with grace period and dynamic duration
@@ -585,7 +585,6 @@ class WebSocketService {
     // Initialize test variables
     const startTime = Date.now();
     let totalUploaded = 0;
-    let measuredUploaded = 0;
     let measurementStartTime = 0;
     let inGracePeriod = true;
     
@@ -682,32 +681,33 @@ class WebSocketService {
   }
 
   // Run a complete speed test
-  runSpeedTest(progressCallback: ProgressCallback): Promise<SpeedTestResult> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Set progress callback
-        this.progressCallback = progressCallback;
-        this.testComplete = false;
-        this.testData = {};
-        
-        // Reset test variables
-        this.inGracePeriod = true;
-        this.earlySpeedSamples = [];
-        this.lastSpeedCheck = 0;
-        this.bonusT = 0;
-        
-        // Initialize protocol overhead factor (default to LibreSpeed value)
-        if (!this.protocolOverheadFactor) {
-          this.protocolOverheadFactor = 1.06; // Default LibreSpeed value
-        }
+  async runSpeedTest(progressCallback: ProgressCallback): Promise<SpeedTestResult> {
+    return new Promise((resolve, reject) => {
+      const runTest = async () => {
+        try {
+          // Set progress callback
+          this.progressCallback = progressCallback;
+          this.testComplete = false;
+          this.testData = {};
+          
+          // Reset test variables
+          this.inGracePeriod = true;
+          this.earlySpeedSamples = [];
+          this.lastSpeedCheck = 0;
+          this.bonusT = 0;
+          
+          // Initialize protocol overhead factor (default to LibreSpeed value)
+          if (!this.protocolOverheadFactor) {
+            this.protocolOverheadFactor = 1.06; // Default LibreSpeed value
+          }
 
-        // Connect to WebSocket server if not connected
-        if (this.state !== WebSocketState.OPEN) {
-          await this.connect();
-        }
+          // Connect to WebSocket server if not connected
+          if (this.state !== WebSocketState.OPEN) {
+            await this.connect();
+          }
 
-        // Start with ping test
-        this.measurePing();
+          // Start with ping test
+          this.measurePing();
 
         // Wait for test to complete
         const checkCompletion = () => {
@@ -749,10 +749,13 @@ class WebSocketService {
           }
         };
 
-        checkCompletion();
-      } catch (error) {
-        reject(error);
-      }
+          checkCompletion();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      
+      runTest();
     });
   }
 
@@ -762,7 +765,7 @@ class WebSocketService {
   }
 
   // Logging helper
-  private log(...args: any[]): void {
+  private log(...args: unknown[]): void {
     if (this.debug) {
       console.log('[WebSocketService]', ...args);
     }

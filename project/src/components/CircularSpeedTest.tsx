@@ -23,7 +23,7 @@ const CircularSpeedTest: React.FC<CircularSpeedTestProps> = ({ onTestComplete })
     setTestProgress(progress);
   }, []);
 
-  const startTest = async () => {
+  const startTest = useCallback(async () => {
     setIsTestRunning(true);
     setTestResult(null);
     setTestProgress({
@@ -63,7 +63,7 @@ const CircularSpeedTest: React.FC<CircularSpeedTestProps> = ({ onTestComplete })
     } finally {
       setIsTestRunning(false);
     }
-  };
+  }, [onTestComplete, handleProgressUpdate]);
 
   // Auto-start test when component mounts
   useEffect(() => {
@@ -73,7 +73,7 @@ const CircularSpeedTest: React.FC<CircularSpeedTestProps> = ({ onTestComplete })
         startTest();
       }, 1000);
     }
-  }, [autoStarted, isTestRunning, testResult]);
+  }, [autoStarted, isTestRunning, testResult, startTest]);
 
   const getPhaseLabel = (phase: string) => {
     switch (phase) {
@@ -86,16 +86,7 @@ const CircularSpeedTest: React.FC<CircularSpeedTestProps> = ({ onTestComplete })
     }
   };
 
-  const getPhaseColor = (phase: string) => {
-    switch (phase) {
-      case 'ping': return 'text-blue-500';
-      case 'download': return 'text-green-500';
-      case 'upload': return 'text-orange-500';
-      case 'packetLoss': return 'text-yellow-500';
-      case 'complete': return 'text-purple-500';
-      default: return 'text-gray-500';
-    }
-  };
+
 
   const getPhaseGradient = (phase: string) => {
     switch (phase) {

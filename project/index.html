@@ -19,6 +19,23 @@
     <meta name="twitter:description" content="Fast and accurate internet speed testing with real-time graphs and detailed results." />
     
     <title>SpeedTest Pro - Fast & Accurate Internet Speed Test</title>
+    <!-- LibreSpeed Speedtest Script -->
+    <script src="/speedtest.js" type="text/javascript"></script>
+    <script>
+      // Check if Speedtest is loaded properly
+      window.addEventListener('load', function() {
+        console.log('Window loaded, Speedtest constructor available:', typeof window.Speedtest);
+        if (typeof window.Speedtest === 'undefined') {
+          console.error('Speedtest constructor not found after page load');
+        } else {
+          console.log('Speedtest constructor successfully loaded');
+        }
+        
+        if (!window.Speedtest) {
+          console.error('Speedtest constructor not available! This will cause the speed test to fail.');
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

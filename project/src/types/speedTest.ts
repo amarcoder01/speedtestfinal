@@ -84,6 +84,7 @@ export interface TestConfig {
   enableDynamicDuration?: boolean; // Enable dynamic test duration (shorter for faster connections)
   tcpGracePeriod?: number; // Grace period in seconds to exclude TCP slow-start
   enableDynamicGracePeriod?: boolean; // Enable dynamic grace period based on connection speed
+  serverSelection?: 'auto' | 'local' | string; // Server selection mode: 'auto' for automatic selection, 'local' for local server, or a specific server ID
 }
 
 export interface NetworkStabilityData {

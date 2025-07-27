@@ -173,15 +173,18 @@ if (cluster.isPrimary && ENABLE_CLUSTER) {
   console.log(`Performance settings: keepAliveTimeout=${keepAliveTimeout}ms, headersTimeout=${headersTimeout}ms`);
   
   // Apply rate limiting to prevent abuse
+  const rateLimitWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000; // Default: 1 minute
+  const rateLimitMaxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 500; // Default: 500 requests per window per IP
+  
   const apiLimiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000, // Default: 1 minute
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 500, // Default: 500 requests per window per IP
+    windowMs: rateLimitWindowMs,
+    max: rateLimitMaxRequests,
     standardHeaders: true,
     legacyHeaders: false,
     message: 'Too many requests, please try again later.'
   });
   
-  console.log(`Rate limiting: ${apiLimiter.options.max} requests per ${apiLimiter.options.windowMs/1000}s`);
+  console.log(`Rate limiting: ${rateLimitMaxRequests} requests per ${rateLimitWindowMs/1000}s`);
   
   // Middleware
   app.use(helmet()); // Security headers

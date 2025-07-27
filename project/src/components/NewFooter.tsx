@@ -1,5 +1,4 @@
 import React from 'react';
-import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Gauge, Shield, Mail, ExternalLink, Github, Twitter, Linkedin, Facebook, Heart } from 'lucide-react';
 

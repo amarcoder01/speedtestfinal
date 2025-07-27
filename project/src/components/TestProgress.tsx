@@ -16,15 +16,7 @@ const TestProgress: React.FC<TestProgressProps> = ({ progress }) => {
     }
   };
 
-  const getPhaseColor = (phase: string) => {
-    switch (phase) {
-      case 'ping': return 'bg-blue-500';
-      case 'download': return 'bg-green-500';
-      case 'upload': return 'bg-orange-500';
-      case 'complete': return 'bg-purple-500';
-      default: return 'bg-gray-500';
-    }
-  };
+
 
   const getPhaseGradient = (phase: string) => {
     switch (phase) {

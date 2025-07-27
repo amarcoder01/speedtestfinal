@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Share2, RotateCcw, Award, TrendingUp, Clock, MapPin } from 'lucide-react';
+import { Share2, Award, Clock, MapPin } from 'lucide-react';
 import { SpeedTestResult } from '../types/speedTest';
 import SpeedGauge from './SpeedGauge';
 import ShareModal from './ShareModal';

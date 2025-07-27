@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Upload, Wifi, RotateCcw, Share2, FileText, ArrowLeft, AlertTriangle, Activity, Clock, MapPin, Server, Globe, Zap, Award } from 'lucide-react';
+import { Download, Upload, RotateCcw, Share2, FileText, ArrowLeft, AlertTriangle, Activity, Clock, MapPin, Server, Globe, Zap, Award } from 'lucide-react';
 import { SpeedTestResult } from '../types/speedTest';
 import ModernShareModal from './ModernShareModal';
-import PacketLossCard from './PacketLossCard';
 import toast from 'react-hot-toast';
 
 const NewResultsPage: React.FC = () => {

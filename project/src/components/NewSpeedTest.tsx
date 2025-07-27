@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Download, Upload, Wifi, RotateCcw, Activity, Zap, Share2, FileText, HelpCircle, Loader, AlertTriangle, Server, Globe, Info, Layers } from 'lucide-react';
+import { Download, Upload, Wifi, RotateCcw, Activity, Share2, FileText, HelpCircle, Loader, AlertTriangle, Server, Globe, Layers } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { SpeedTestResult, TestProgress as TestProgressType, TestProtocol } from '../types/speedTest';
 import SpeedTestEngine from '../utils/speedTestEngine';
@@ -38,7 +38,8 @@ const NewSpeedTest: React.FC<NewSpeedTestProps> = ({ onTestComplete }) => {
     setTestProgress(progress);
   }, []);
 
-  const startTest = async () => {
+  const startTest = useCallback(async () => {
+    console.log('Starting speed test...');
     setIsTestRunning(true);
     setTestResult(null);
     setTestProgress({
@@ -49,26 +50,49 @@ const NewSpeedTest: React.FC<NewSpeedTestProps> = ({ onTestComplete }) => {
     });
 
     try {
+      // Ensure server is set to auto for most accurate results
+      if (selectedServer !== 'auto') {
+        console.log('Setting server selection to auto for most accurate results');
+        setSelectedServer('auto');
+      }
+      
+      console.log(`Initializing SpeedTestEngine with protocol: ${selectedProtocol}`);
       const testEngine = new SpeedTestEngine(handleProgressUpdate, undefined, {
         duration: 10,
-        parallelConnections: 4,
+        parallelConnections: 6, // Increased from 4 to 6 for better performance
         enableBufferbloat: true,
         enableStressTest: false,
         protocol: selectedProtocol,
         enableBrowserOptimizations: true,
         pingUsePerformanceAPI: true,
-        uploadParallelConnections: 3,
+        uploadParallelConnections: 4, // Increased from 3 to 4
         enableAutoProtocolOverhead: true,
-        forceIE11Workaround: false
+        forceIE11Workaround: false,
+        // Add server selection parameter
+        serverSelection: 'auto',
+        // Add timeout parameter
+        timeout: 15000 // 15 seconds timeout for server connections
       });
       
+      toast('Connecting to speed test servers...', {
+        duration: 3000,
+        icon: '🔄'
+      });
+      
+      console.log('Running speed test...');
       const result = await testEngine.runSpeedTest();
+      console.log('Speed test completed successfully:', result);
+      
       setTestResult(result);
       
       // Store result in localStorage
       const savedResults = JSON.parse(localStorage.getItem('speedTestResults') || '[]');
       savedResults.unshift(result);
       localStorage.setItem('speedTestResults', JSON.stringify(savedResults.slice(0, 20)));
+      
+      toast.success('Test completed successfully!', {
+        duration: 3000
+      });
       
       if (onTestComplete) {
         onTestComplete(result);
@@ -78,12 +102,50 @@ const NewSpeedTest: React.FC<NewSpeedTestProps> = ({ onTestComplete }) => {
       setShouldRedirect(true);
     } catch (error) {
       console.error('Speed test failed:', error);
-      toast.error('Test failed. Retrying...');
-      setTimeout(() => startTest(), 2000);
+      
+      // Show more informative error message
+      if (error instanceof Error) {
+        if (error.message.includes('timed out')) {
+          console.warn('Speed test timed out');
+          toast.error('Connection to speed test servers timed out. Please check your internet connection and try again.', {
+            duration: 5000,
+            icon: '⚠️'
+          });
+        } else if (error.message.includes('failed to connect') || error.message.includes('server')) {
+          console.warn('Failed to connect to speed test servers');
+          toast.error('Unable to connect to speed test servers. Please check your internet connection or try again later.', {
+            duration: 5000,
+            icon: '⚠️'
+          });
+        } else {
+          console.warn(`Speed test failed with error: ${error.message}`);
+          toast.error(`Test failed: ${error.message}. Retrying in 5 seconds...`, {
+            duration: 5000,
+            icon: '⚠️'
+          });
+        }
+      } else {
+        console.warn('Speed test failed with unknown error');
+        toast.error('Test failed with an unknown error. Retrying in 5 seconds...', {
+          duration: 4000,
+          icon: '⚠️'
+        });
+      }
+      
+      // Retry after a longer delay
+      toast('Retrying test in 5 seconds...', {
+        duration: 4000,
+        icon: '🔄'
+      });
+      
+      setTimeout(() => {
+        console.log('Retrying speed test...');
+        startTest();
+      }, 5000);
     } finally {
       setIsTestRunning(false);
     }
-  };
+  }, [handleProgressUpdate, selectedServer, selectedProtocol, onTestComplete]);
 
   const resetTest = () => {
     setTestResult(null);
@@ -102,13 +164,18 @@ const NewSpeedTest: React.FC<NewSpeedTestProps> = ({ onTestComplete }) => {
 
   // Auto-start test when component mounts
   useEffect(() => {
+    // Log whether Speedtest constructor is available
+    console.log('NewSpeedTest component mounted, Speedtest available:', typeof window.Speedtest !== 'undefined');
+    
     if (!autoStarted && !isTestRunning && !testResult) {
+      // Always set server to auto for accurate results
+      setSelectedServer('auto');
       setAutoStarted(true);
       setTimeout(() => {
         startTest();
       }, 1000);
     }
-  }, [autoStarted, isTestRunning, testResult]);
+  }, [autoStarted, isTestRunning, testResult, startTest]);
 
   // Redirect to results page after test completion
   useEffect(() => {

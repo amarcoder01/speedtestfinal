@@ -5,10 +5,10 @@
 const LIBRESPEED_WORKER_PATH = '/speedtest_worker.js';
 
 let worker: Worker | null = null;
-let onMessageCallback: ((data: any) => void) | null = null;
+let onMessageCallback: ((data: unknown) => void) | null = null;
 
 // Start the speed test
-export function startSpeedTest(settings: any, onMessage: (data: any) => void) {
+export function startSpeedTest(settings: Record<string, unknown>, onMessage: (data: unknown) => void) {
   if (worker) {
     worker.terminate();
   }
@@ -19,7 +19,7 @@ export function startSpeedTest(settings: any, onMessage: (data: any) => void) {
       try {
         const data = JSON.parse(e.data);
         onMessageCallback(data);
-      } catch (err) {
+      } catch {
         // fallback for non-JSON messages
         onMessageCallback(e.data);
       }
