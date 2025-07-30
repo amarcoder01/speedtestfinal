@@ -1,0 +1,154 @@
+name: Scheduled Backups
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:
+
+jobs:
+  backup-code:
+    name: Backup Code Repository
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Create code archive
+      run: |
+        TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+        REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
+        ARCHIVE_NAME="${REPO_NAME}-code-backup-${TIMESTAMP}.zip"
+        
+        # Create zip archive of the repository
+        zip -r "$ARCHIVE_NAME" . -x "node_modules/*" "*/node_modules/*" "*/dist/*" "*/build/*" "*/.git/*"
+        
+        echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
+
+    - name: Upload to S3
+      if: false  # Disabled until S3 credentials are configured
+      uses: jakejarvis/s3-sync-action@master
+      with:
+        args: --acl private --follow-symlinks
+      env:
+        AWS_S3_BUCKET: ${{ secrets.BACKUP_BUCKET_NAME }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        SOURCE_DIR: './${{ env.ARCHIVE_NAME }}'
+        DEST_DIR: 'code-backups/'
+
+    - name: Upload backup as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: code-backup
+        path: ${{ env.ARCHIVE_NAME }}
+        retention-days: 7
+
+  backup-database:
+    name: Backup Database
+    runs-on: ubuntu-latest
+    if: false  # Disabled until database credentials are configured
+    
+    steps:
+    - name: Set up environment
+      run: |
+        TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+
+    - name: Install MongoDB tools
+      run: |
+        wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
+        echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+        sudo apt-get update
+        sudo apt-get install -y mongodb-database-tools
+
+    - name: Backup MongoDB
+      run: |
+        # Create backup directory
+        mkdir -p mongodb-backup
+        
+        # Run mongodump
+        mongodump --uri="${{ secrets.MONGODB_URI }}" --out=mongodb-backup
+        
+        # Create archive
+        ARCHIVE_NAME="mongodb-backup-${TIMESTAMP}.zip"
+        zip -r "$ARCHIVE_NAME" mongodb-backup
+        
+        echo "DB_ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
+
+    - name: Upload to S3
+      uses: jakejarvis/s3-sync-action@master
+      with:
+        args: --acl private --follow-symlinks
+      env:
+        AWS_S3_BUCKET: ${{ secrets.BACKUP_BUCKET_NAME }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        SOURCE_DIR: './${{ env.DB_ARCHIVE_NAME }}'
+        DEST_DIR: 'database-backups/'
+
+    - name: Upload backup as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: database-backup
+        path: ${{ env.DB_ARCHIVE_NAME }}
+        retention-days: 3
+
+  cleanup-old-backups:
+    name: Cleanup Old Backups
+    runs-on: ubuntu-latest
+    needs: [backup-code]
+    if: false  # Disabled until S3 credentials are configured
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: List and delete old backups
+      run: |
+        # Keep the last 7 daily backups
+        echo "Listing code backups..."
+        aws s3 ls s3://${{ secrets.BACKUP_BUCKET_NAME }}/code-backups/ --recursive | sort
+        
+        echo "Removing code backups older than 7 days..."
+        aws s3 ls s3://${{ secrets.BACKUP_BUCKET_NAME }}/code-backups/ --recursive | sort | head -n -7 | awk '{print $4}' | xargs -I {} aws s3 rm s3://${{ secrets.BACKUP_BUCKET_NAME }}/{}
+        
+        # Keep the last 3 database backups
+        echo "Listing database backups..."
+        aws s3 ls s3://${{ secrets.BACKUP_BUCKET_NAME }}/database-backups/ --recursive | sort
+        
+        echo "Removing database backups older than 3 days..."
+        aws s3 ls s3://${{ secrets.BACKUP_BUCKET_NAME }}/database-backups/ --recursive | sort | head -n -3 | awk '{print $4}' | xargs -I {} aws s3 rm s3://${{ secrets.BACKUP_BUCKET_NAME }}/{}
+
+  notify-backup-status:
+    name: Notify Backup Status
+    runs-on: ubuntu-latest
+    needs: [backup-code]
+    if: always()
+    
+    steps:
+    - name: Notify via email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ secrets.MAIL_SERVER }}
+        server_port: ${{ secrets.MAIL_PORT }}
+        username: ${{ secrets.MAIL_USERNAME }}
+        password: ${{ secrets.MAIL_PASSWORD }}
+        subject: Backup Status - ${{ github.repository }}
+        body: |
+          Backup Status Report for ${{ github.repository }}
+          
+          Code Backup: ${{ needs.backup-code.result }}
+          Database Backup: ${{ contains(needs.*.result, 'backup-database') && needs.backup-database.result || 'Disabled' }}
+          Cleanup: ${{ contains(needs.*.result, 'cleanup-old-backups') && needs.cleanup-old-backups.result || 'Disabled' }}
+          
+          Timestamp: ${{ github.event.repository.updated_at }}
+          
+          This is an automated message from GitHub Actions.
+        to: ${{ secrets.ADMIN_EMAIL }}
+        from: GitHub Actions

@@ -1,0 +1,159 @@
+name: Pull Request Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  triage:
+    name: PR Triage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Label based on changed files
+        uses: actions/labeler@v4
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler-config.yml
+          sync-labels: true
+
+      - name: Label based on PR size
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            
+            let additions = 0;
+            let deletions = 0;
+            let changedFiles = files.length;
+            
+            files.forEach(file => {
+              additions += file.additions;
+              deletions += file.deletions;
+            });
+            
+            const totalChanges = additions + deletions;
+            
+            // Remove existing size labels
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const sizeLabels = ['size/XS', 'size/S', 'size/M', 'size/L', 'size/XL', 'size/XXL'];
+            for (const label of currentLabels) {
+              if (sizeLabels.includes(label.name)) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: label.name,
+                });
+              }
+            }
+            
+            // Add new size label
+            let newSizeLabel = '';
+            if (totalChanges < 10) {
+              newSizeLabel = 'size/XS';
+            } else if (totalChanges < 50) {
+              newSizeLabel = 'size/S';
+            } else if (totalChanges < 250) {
+              newSizeLabel = 'size/M';
+            } else if (totalChanges < 500) {
+              newSizeLabel = 'size/L';
+            } else if (totalChanges < 1000) {
+              newSizeLabel = 'size/XL';
+            } else {
+              newSizeLabel = 'size/XXL';
+            }
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [newSizeLabel],
+            });
+            
+            console.log(`PR #${context.issue.number} has been labeled as ${newSizeLabel}`);
+            console.log(`Changes: ${totalChanges} (${additions} additions, ${deletions} deletions) in ${changedFiles} files`);
+
+      - name: Label based on branch name
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branchName = context.payload.pull_request.head.ref;
+            let typeLabel = null;
+            
+            if (branchName.startsWith('feature/')) {
+              typeLabel = 'type/feature';
+            } else if (branchName.startsWith('bugfix/')) {
+              typeLabel = 'type/bugfix';
+            } else if (branchName.startsWith('hotfix/')) {
+              typeLabel = 'type/hotfix';
+            } else if (branchName.startsWith('release/')) {
+              typeLabel = 'type/release';
+            } else if (branchName.startsWith('docs/')) {
+              typeLabel = 'type/docs';
+            } else if (branchName.startsWith('refactor/')) {
+              typeLabel = 'type/refactor';
+            } else if (branchName.startsWith('test/')) {
+              typeLabel = 'type/test';
+            } else if (branchName.startsWith('chore/')) {
+              typeLabel = 'type/chore';
+            }
+            
+            if (typeLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [typeLabel],
+              });
+              console.log(`Added ${typeLabel} label based on branch name: ${branchName}`);
+            }
+
+      - name: Label draft PRs
+        if: github.event.pull_request.draft == true
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['status/draft'],
+            });
+
+      - name: Remove draft label when PR is ready
+        if: github.event.pull_request.draft == false
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: 'status/draft',
+              });
+            } catch (error) {
+              // Label might not exist, which is fine
+              console.log('Draft label not found or already removed');
+            }

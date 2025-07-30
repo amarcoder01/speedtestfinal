@@ -1,0 +1,209 @@
+name: Workflow Visualization
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 1'  # Every Monday at midnight
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+
+jobs:
+  generate-visualization:
+    name: Generate Workflow Visualization
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm install -g @mermaid-js/mermaid-cli
+          npm install js-yaml
+
+      - name: Generate workflow diagrams
+        id: generate-diagrams
+        run: |
+          mkdir -p docs/workflow-diagrams
+          
+          # Create a script to generate the diagrams
+          cat > generate-diagrams.js << 'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const yaml = require('js-yaml');
+          
+          // Directory containing workflow files
+          const workflowsDir = '.github/workflows';
+          const outputDir = 'docs/workflow-diagrams';
+          
+          // Ensure output directory exists
+          if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+          }
+          
+          // Read all workflow files
+          const workflowFiles = fs.readdirSync(workflowsDir)
+            .filter(file => file.endsWith('.yml') || file.endsWith('.yaml'));
+          
+          // Generate index file content
+          let indexContent = '# Workflow Visualizations\n\n';
+          indexContent += 'This directory contains visualizations of all GitHub Actions workflows in this repository.\n\n';
+          indexContent += '## Workflows\n\n';
+          
+          // Process each workflow file
+          workflowFiles.forEach(file => {
+            const filePath = path.join(workflowsDir, file);
+            const fileContent = fs.readFileSync(filePath, 'utf8');
+            
+            try {
+              // Parse YAML content
+              const workflow = yaml.load(fileContent);
+              const workflowName = workflow.name || path.basename(file, path.extname(file));
+              
+              console.log(`Processing workflow: ${workflowName}`);
+              
+              // Generate Mermaid diagram
+              let mermaidContent = 'flowchart TD\n';
+              mermaidContent += `  start["${workflowName}"] --> trigger["Triggers"]\n`;
+              
+              // Add triggers
+              if (workflow.on) {
+                const triggers = workflow.on;
+                if (typeof triggers === 'object') {
+                  Object.keys(triggers).forEach(trigger => {
+                    mermaidContent += `  trigger --> ${trigger}["${trigger}"]\n`;
+                  });
+                } else {
+                  mermaidContent += `  trigger --> ${triggers}["${triggers}"]\n`;
+                }
+              }
+              
+              // Add jobs
+              if (workflow.jobs) {
+                mermaidContent += '  trigger --> jobs["Jobs"]\n';
+                
+                const jobs = workflow.jobs;
+                const jobNames = Object.keys(jobs);
+                
+                jobNames.forEach(jobName => {
+                  const job = jobs[jobName];
+                  mermaidContent += `  jobs --> ${jobName}["${jobName}"]\n`;
+                  
+                  // Add job dependencies
+                  if (job.needs) {
+                    const needs = Array.isArray(job.needs) ? job.needs : [job.needs];
+                    needs.forEach(need => {
+                      mermaidContent += `  ${need} --> ${jobName}\n`;
+                    });
+                  }
+                  
+                  // Add steps if available
+                  if (job.steps) {
+                    job.steps.forEach((step, index) => {
+                      const stepName = step.name || `step_${index}`;
+                      const safeStepName = `${jobName}_step_${index}`;
+                      mermaidContent += `  ${jobName} --> ${safeStepName}["${stepName}"]\n`;
+                    });
+                  }
+                });
+              }
+              
+              // Write Mermaid content to file
+              const outputFileName = path.basename(file, path.extname(file));
+              const mermaidFilePath = path.join(outputDir, `${outputFileName}.mmd`);
+              fs.writeFileSync(mermaidFilePath, mermaidContent);
+              
+              // Add to index
+              indexContent += `- [${workflowName}](./${outputFileName}.svg) - [Source](../../${filePath})\n`;
+              
+              console.log(`Generated diagram for ${workflowName}`);
+            } catch (error) {
+              console.error(`Error processing ${file}: ${error.message}`);
+            }
+          });
+          
+          // Generate overview diagram
+          let overviewContent = 'flowchart LR\n';
+          overviewContent += '  cicd["CI/CD Pipeline"] --> build["Build & Test"]\n';
+          overviewContent += '  cicd --> deploy["Deployment"]\n';
+          overviewContent += '  cicd --> quality["Code Quality"]\n';
+          overviewContent += '  cicd --> security["Security"]\n';
+          overviewContent += '  cicd --> docs["Documentation"]\n';
+          overviewContent += '  cicd --> monitoring["Monitoring"]\n';
+          overviewContent += '  cicd --> automation["Automation"]\n\n';
+          
+          // Add workflow connections
+          workflowFiles.forEach(file => {
+            try {
+              const filePath = path.join(workflowsDir, file);
+              const fileContent = fs.readFileSync(filePath, 'utf8');
+              const workflow = yaml.load(fileContent);
+              const workflowName = workflow.name || path.basename(file, path.extname(file));
+              const safeWorkflowName = workflowName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+              
+              // Categorize workflows
+              if (file.includes('ci-cd') || file.includes('build') || file.includes('test')) {
+                overviewContent += `  build --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else if (file.includes('deploy') || file.includes('release') || file.includes('environment')) {
+                overviewContent += `  deploy --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else if (file.includes('quality') || file.includes('lint') || file.includes('format')) {
+                overviewContent += `  quality --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else if (file.includes('security') || file.includes('scan')) {
+                overviewContent += `  security --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else if (file.includes('doc') || file.includes('changelog')) {
+                overviewContent += `  docs --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else if (file.includes('monitor') || file.includes('alert') || file.includes('backup')) {
+                overviewContent += `  monitoring --> ${safeWorkflowName}["${workflowName}"]\n`;
+              } else {
+                overviewContent += `  automation --> ${safeWorkflowName}["${workflowName}"]\n`;
+              }
+            } catch (error) {
+              console.error(`Error categorizing ${file}: ${error.message}`);
+            }
+          });
+          
+          // Write overview diagram
+          fs.writeFileSync(path.join(outputDir, 'overview.mmd'), overviewContent);
+          
+          // Add overview to index
+          indexContent = `# Workflow Visualizations\n\n## Overview\n\n![CI/CD Pipeline Overview](./overview.svg)\n\n` + indexContent.split('# Workflow Visualizations')[1];
+          
+          // Write index file
+          fs.writeFileSync(path.join(outputDir, 'README.md'), indexContent);
+          
+          console.log('Generated workflow visualizations successfully!');
+          EOF
+          
+          # Run the script
+          node generate-diagrams.js
+          
+          # Convert Mermaid files to SVG
+          for file in docs/workflow-diagrams/*.mmd; do
+            mmdc -i "$file" -o "${file%.mmd}.svg" -t dark
+            echo "Converted $file to SVG"
+          done
+
+      - name: Commit and push visualizations
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add docs/workflow-diagrams/
+          git commit -m "docs: update workflow visualizations" || echo "No changes to commit"
+          git push
+
+      - name: Generate summary
+        run: |
+          echo "## Workflow Visualizations Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The workflow visualizations have been updated and committed to the repository." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Visualizations](https://github.com/${{ github.repository }}/tree/main/docs/workflow-diagrams)" >> $GITHUB_STEP_SUMMARY

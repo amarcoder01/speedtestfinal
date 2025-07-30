@@ -1,0 +1,108 @@
+name: Performance Testing
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'project/**'
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        npm ci
+        cd backend && npm ci
+        cd ../project && npm ci
+
+    - name: Build application
+      run: npm run build:all
+
+    - name: Start application in background
+      run: |
+        cd backend
+        nohup npm start &
+        echo $! > ../backend.pid
+        cd ../project
+        npx serve -s dist -l 5000 &
+        echo $! > ../frontend.pid
+        sleep 10
+
+    - name: Install k6
+      run: |
+        curl -L https://github.com/grafana/k6/releases/download/v0.42.0/k6-v0.42.0-linux-amd64.tar.gz -o k6.tar.gz
+        tar -xzf k6.tar.gz
+        sudo cp k6-v0.42.0-linux-amd64/k6 /usr/local/bin
+
+    - name: Run load tests
+      run: |
+        cat > load-test.js << 'EOL'
+        import http from 'k6/http';
+        import { sleep, check } from 'k6';
+
+        export const options = {
+          vus: 10,
+          duration: '30s',
+          thresholds: {
+            http_req_duration: ['p(95)<500'],
+            http_req_failed: ['rate<0.1'],
+          },
+        };
+
+        export default function () {
+          // Test ping endpoint
+          const pingRes = http.get('http://localhost:3000/ping');
+          check(pingRes, {
+            'ping status is 200': (r) => r.status === 200,
+            'ping response time < 200ms': (r) => r.timings.duration < 200,
+          });
+
+          // Test download endpoint with small payload
+          const downloadRes = http.get('http://localhost:3000/download?bytes=10000');
+          check(downloadRes, {
+            'download status is 200': (r) => r.status === 200,
+            'download size is correct': (r) => r.body.length === 10000,
+            'download response time < 500ms': (r) => r.timings.duration < 500,
+          });
+
+          // Test upload endpoint with small payload
+          const payload = 'X'.repeat(10000);
+          const uploadRes = http.post('http://localhost:3000/upload', payload);
+          check(uploadRes, {
+            'upload status is 200': (r) => r.status === 200,
+            'upload response time < 500ms': (r) => r.timings.duration < 500,
+          });
+
+          sleep(1);
+        }
+        EOL
+
+        k6 run load-test.js
+
+    - name: Stop application
+      if: always()
+      run: |
+        if [ -f backend.pid ]; then kill $(cat backend.pid) || true; fi
+        if [ -f frontend.pid ]; then kill $(cat frontend.pid) || true; fi
+
+    - name: Archive test results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-test-results
+        path: |
+          load-test.js
+          k6-summary.json
+        retention-days: 7

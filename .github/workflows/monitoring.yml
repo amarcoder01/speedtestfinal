@@ -1,0 +1,179 @@
+name: Monitoring and Alerts
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Run every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    name: Service Health Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check production API health
+      id: prod-api-health
+      uses: jtalk/url-health-check-action@v3
+      with:
+        url: ${{ secrets.PROD_API_URL }}/ping
+        max-attempts: 3
+        retry-delay: 5s
+        retry-all: true
+      continue-on-error: true
+
+    - name: Check production frontend health
+      id: prod-frontend-health
+      uses: jtalk/url-health-check-action@v3
+      with:
+        url: ${{ secrets.PROD_FRONTEND_URL }}
+        max-attempts: 3
+        retry-delay: 5s
+        retry-all: true
+      continue-on-error: true
+
+    - name: Check staging API health
+      id: staging-api-health
+      uses: jtalk/url-health-check-action@v3
+      with:
+        url: ${{ secrets.STAGING_API_URL }}/ping
+        max-attempts: 3
+        retry-delay: 5s
+        retry-all: true
+      continue-on-error: true
+
+    - name: Check staging frontend health
+      id: staging-frontend-health
+      uses: jtalk/url-health-check-action@v3
+      with:
+        url: ${{ secrets.STAGING_FRONTEND_URL }}
+        max-attempts: 3
+        retry-delay: 5s
+        retry-all: true
+      continue-on-error: true
+
+    - name: Determine overall health status
+      id: health-status
+      run: |
+        PROD_API_STATUS="${{ steps.prod-api-health.outcome }}"
+        PROD_FRONTEND_STATUS="${{ steps.prod-frontend-health.outcome }}"
+        STAGING_API_STATUS="${{ steps.staging-api-health.outcome }}"
+        STAGING_FRONTEND_STATUS="${{ steps.staging-frontend-health.outcome }}"
+        
+        echo "Production API: $PROD_API_STATUS"
+        echo "Production Frontend: $PROD_FRONTEND_STATUS"
+        echo "Staging API: $STAGING_API_STATUS"
+        echo "Staging Frontend: $STAGING_FRONTEND_STATUS"
+        
+        # Check if any production service is down
+        if [ "$PROD_API_STATUS" == "failure" ] || [ "$PROD_FRONTEND_STATUS" == "failure" ]; then
+          echo "ALERT_NEEDED=true" >> $GITHUB_OUTPUT
+          echo "ALERT_LEVEL=critical" >> $GITHUB_OUTPUT
+          
+          # Build alert message
+          ALERT_MESSAGE="⚠️ CRITICAL ALERT: Production services are down!\n"
+          
+          if [ "$PROD_API_STATUS" == "failure" ]; then
+            ALERT_MESSAGE="$ALERT_MESSAGE\n- Production API is not responding"
+          fi
+          
+          if [ "$PROD_FRONTEND_STATUS" == "failure" ]; then
+            ALERT_MESSAGE="$ALERT_MESSAGE\n- Production Frontend is not responding"
+          fi
+          
+          echo "ALERT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
+          echo "$ALERT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+        # Check if any staging service is down
+        elif [ "$STAGING_API_STATUS" == "failure" ] || [ "$STAGING_FRONTEND_STATUS" == "failure" ]; then
+          echo "ALERT_NEEDED=true" >> $GITHUB_OUTPUT
+          echo "ALERT_LEVEL=warning" >> $GITHUB_OUTPUT
+          
+          # Build alert message
+          ALERT_MESSAGE="⚠️ WARNING: Staging services are down!\n"
+          
+          if [ "$STAGING_API_STATUS" == "failure" ]; then
+            ALERT_MESSAGE="$ALERT_MESSAGE\n- Staging API is not responding"
+          fi
+          
+          if [ "$STAGING_FRONTEND_STATUS" == "failure" ]; then
+            ALERT_MESSAGE="$ALERT_MESSAGE\n- Staging Frontend is not responding"
+          fi
+          
+          echo "ALERT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
+          echo "$ALERT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+        else
+          echo "ALERT_NEEDED=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Send Slack alert
+      if: steps.health-status.outputs.ALERT_NEEDED == 'true'
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_CHANNEL: alerts
+        SLACK_COLOR: ${{ steps.health-status.outputs.ALERT_LEVEL == 'critical' && 'danger' || 'warning' }}
+        SLACK_TITLE: Service Health Alert
+        SLACK_MESSAGE: ${{ steps.health-status.outputs.ALERT_MESSAGE }}
+        SLACK_FOOTER: 'SpeedTest App Monitoring'
+
+    - name: Send email alert
+      if: steps.health-status.outputs.ALERT_NEEDED == 'true' && steps.health-status.outputs.ALERT_LEVEL == 'critical'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ secrets.MAIL_SERVER }}
+        server_port: ${{ secrets.MAIL_PORT }}
+        username: ${{ secrets.MAIL_USERNAME }}
+        password: ${{ secrets.MAIL_PASSWORD }}
+        subject: 🚨 CRITICAL - SpeedTest Service Down
+        body: |
+          ${{ steps.health-status.outputs.ALERT_MESSAGE }}
+          
+          Timestamp: ${{ github.event.repository.updated_at }}
+          
+          Please investigate immediately.
+          
+          This is an automated alert from GitHub Actions.
+        to: ${{ secrets.ADMIN_EMAIL }}
+        from: GitHub Actions
+
+  performance-metrics:
+    name: Performance Metrics
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check API response time
+      id: api-performance
+      run: |
+        # Measure API response time
+        START_TIME=$(date +%s%N)
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.PROD_API_URL }}/ping)
+        END_TIME=$(date +%s%N)
+        
+        # Calculate response time in milliseconds
+        RESPONSE_TIME=$(( ($END_TIME - $START_TIME) / 1000000 ))
+        
+        echo "HTTP Status: $HTTP_STATUS"
+        echo "Response Time: $RESPONSE_TIME ms"
+        
+        # Check if response time is acceptable
+        if [ $RESPONSE_TIME -gt 500 ]; then
+          echo "PERFORMANCE_ALERT=true" >> $GITHUB_OUTPUT
+          echo "ALERT_MESSAGE=⚠️ API response time is high: $RESPONSE_TIME ms (threshold: 500 ms)" >> $GITHUB_OUTPUT
+        else
+          echo "PERFORMANCE_ALERT=false" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
+
+    - name: Send performance alert
+      if: steps.api-performance.outputs.PERFORMANCE_ALERT == 'true'
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_CHANNEL: alerts
+        SLACK_COLOR: warning
+        SLACK_TITLE: Performance Alert
+        SLACK_MESSAGE: ${{ steps.api-performance.outputs.ALERT_MESSAGE }}
+        SLACK_FOOTER: 'SpeedTest App Monitoring'

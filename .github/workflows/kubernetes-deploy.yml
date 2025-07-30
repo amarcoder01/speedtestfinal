@@ -1,0 +1,44 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'kubernetes/**'
+      - 'helm/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: 'latest'
+
+    - name: Configure Kubernetes context
+      uses: azure/k8s-set-context@v3
+      with:
+        kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+    - name: Deploy with Helm
+      run: |
+        helm upgrade --install speedtest ./helm/speedtest \
+          --set image.repository=${{ secrets.DOCKER_USERNAME }}/speedtest \
+          --set image.tag=latest \
+          --namespace speedtest --create-namespace
+
+    - name: Verify deployment
+      run: |
+        kubectl rollout status deployment/speedtest -n speedtest
+        kubectl get services -n speedtest

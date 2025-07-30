@@ -1,0 +1,187 @@
+name: Branch Protection
+
+on:
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+
+jobs:
+  required-checks:
+    name: Enforce Required Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit message format
+        run: |
+          # Get the commit message of the PR
+          COMMIT_MSG=$(git log --format=%B -n 1 ${{ github.event.pull_request.head.sha }})
+          echo "Commit message: $COMMIT_MSG"
+          
+          # Check if commit message follows conventional commits format
+          if ! echo "$COMMIT_MSG" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+'; then
+            echo "::error::Commit message does not follow the Conventional Commits format."
+            echo "::error::Expected format: type(scope): description"
+            echo "::error::Example: feat(auth): add login functionality"
+            exit 1
+          fi
+          
+          echo "✅ Commit message format is valid"
+
+      - name: Check for protected files changes
+        run: |
+          # List of protected files/directories that require special attention
+          PROTECTED_FILES=(
+            "package.json"
+            "package-lock.json"
+            "backend/package.json"
+            "backend/package-lock.json"
+            "project/package.json"
+            "project/package-lock.json"
+            ".github/workflows/"
+            "Dockerfile"
+            "docker-compose.yml"
+            "kubernetes/"
+            "helm/"
+            "render.yaml"
+          )
+          
+          # Get changed files in this PR
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.event.pull_request.head.sha }})
+          
+          # Check if any protected files were changed
+          PROTECTED_CHANGED=""
+          for FILE in ${PROTECTED_FILES[@]}; do
+            if echo "$CHANGED_FILES" | grep -q "$FILE"; then
+              PROTECTED_CHANGED="$PROTECTED_CHANGED\n- $FILE"
+            fi
+          done
+          
+          # If protected files were changed, add a comment to the PR
+          if [ ! -z "$PROTECTED_CHANGED" ]; then
+            echo "::warning::This PR changes protected files that require careful review:$PROTECTED_CHANGED"
+            echo "PROTECTED_FILES_CHANGED=true" >> $GITHUB_ENV
+            echo "PROTECTED_FILES_LIST<<EOF" >> $GITHUB_ENV
+            echo "$PROTECTED_CHANGED" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "No protected files were changed in this PR."
+            echo "PROTECTED_FILES_CHANGED=false" >> $GITHUB_ENV
+          fi
+
+      - name: Comment on PR for protected files
+        if: env.PROTECTED_FILES_CHANGED == 'true'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const protectedFiles = process.env.PROTECTED_FILES_LIST;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `⚠️ **Warning: Protected Files Changed**\n\nThis PR modifies files that require careful review:${protectedFiles}\n\nPlease ensure these changes are intentional and have been thoroughly tested.`
+            });
+
+  branch-rules:
+    name: Enforce Branch Rules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Check branch naming convention
+        if: github.event_name == 'pull_request'
+        run: |
+          BRANCH_NAME="${{ github.head_ref }}"
+          echo "Branch name: $BRANCH_NAME"
+          
+          # Check if branch follows naming convention
+          if ! echo "$BRANCH_NAME" | grep -qE '^(feature|bugfix|hotfix|release|docs|refactor|test|chore)/[a-z0-9-]+$'; then
+            echo "::error::Branch name does not follow the required naming convention."
+            echo "::error::Expected format: type/description-in-kebab-case"
+            echo "::error::Example: feature/user-authentication"
+            exit 1
+          fi
+          
+          echo "✅ Branch naming convention is valid"
+
+      - name: Check for merge conflicts
+        run: |
+          # Check if there are merge conflicts
+          git fetch origin ${{ github.base_ref }}
+          git checkout ${{ github.head_ref }}
+          
+          if git merge-tree $(git merge-base HEAD origin/${{ github.base_ref }}) HEAD origin/${{ github.base_ref }} | grep -q "^<<<<<<< "; then
+            echo "::error::This branch has merge conflicts with the base branch."
+            echo "::error::Please resolve the conflicts before merging."
+            exit 1
+          fi
+          
+          echo "✅ No merge conflicts detected"
+
+  code-size:
+    name: Check Code Size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Check PR size
+        run: |
+          # Get the number of changed files and lines
+          git fetch origin ${{ github.base_ref }}
+          
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | wc -l)
+          CHANGED_LINES=$(git diff --numstat origin/${{ github.base_ref }} HEAD | awk '{s+=$1+$2} END {print s}')
+          
+          echo "Changed files: $CHANGED_FILES"
+          echo "Changed lines: $CHANGED_LINES"
+          
+          # Set warning thresholds
+          FILES_WARNING=20
+          LINES_WARNING=500
+          
+          # Set error thresholds
+          FILES_ERROR=50
+          LINES_ERROR=1000
+          
+          # Check against thresholds
+          if [ $CHANGED_FILES -ge $FILES_ERROR ] || [ $CHANGED_LINES -ge $LINES_ERROR ]; then
+            echo "::error::This PR is too large. Consider breaking it down into smaller PRs."
+            echo "::error::Changed files: $CHANGED_FILES (limit: $FILES_ERROR)"
+            echo "::error::Changed lines: $CHANGED_LINES (limit: $LINES_ERROR)"
+            echo "PR_SIZE=error" >> $GITHUB_ENV
+          elif [ $CHANGED_FILES -ge $FILES_WARNING ] || [ $CHANGED_LINES -ge $LINES_WARNING ]; then
+            echo "::warning::This PR is quite large. Consider breaking it down into smaller PRs."
+            echo "::warning::Changed files: $CHANGED_FILES (warning: $FILES_WARNING)"
+            echo "::warning::Changed lines: $CHANGED_LINES (warning: $LINES_WARNING)"
+            echo "PR_SIZE=warning" >> $GITHUB_ENV
+          else
+            echo "✅ PR size is acceptable"
+            echo "PR_SIZE=ok" >> $GITHUB_ENV
+          fi
+
+      - name: Comment on PR for size
+        if: env.PR_SIZE != 'ok' && github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const size = process.env.PR_SIZE;
+            const icon = size === 'error' ? '🚫' : '⚠️';
+            const message = size === 'error' ? 'This PR is too large' : 'This PR is quite large';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${icon} **${message}**\n\nLarge PRs are harder to review and more likely to introduce bugs. Please consider breaking this PR down into smaller, more focused PRs.`
+            });

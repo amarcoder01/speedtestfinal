@@ -1,0 +1,79 @@
+# Default values for speedtest chart
+
+replicaCount: 3
+
+image:
+  repository: dockerhub-username/speedtest-pro
+  tag: latest
+  pullPolicy: Always
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: false
+  name: ""
+
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  backend:
+    type: ClusterIP
+    port: 3000
+  frontend:
+    type: LoadBalancer
+    port: 80
+    targetPort: 5000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: speedtest.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 1
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+livenessProbe:
+  path: /health
+  port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+
+readinessProbe:
+  path: /health
+  port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+
+persistence:
+  enabled: true
+  storageClassName: standard
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+environment:
+  NODE_ENV: production
+  PORT: 3000
+  ENABLE_CLUSTER: "true"
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  KEEP_ALIVE_TIMEOUT: "65000"
+  HEADERS_TIMEOUT: "66000"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

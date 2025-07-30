@@ -1,0 +1,125 @@
+name: Documentation Generation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'project/src/**'
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  api-docs:
+    name: Generate API Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        cd backend
+        npm ci
+        npm install --save-dev jsdoc swagger-jsdoc swagger-ui-express
+
+    - name: Generate API documentation
+      run: |
+        cd backend
+        cat > jsdoc.json << 'EOL'
+        {
+          "source": {
+            "include": ["./"],
+            "includePattern": "\\.js$",
+            "excludePattern": "(node_modules/|docs/|dist/)"
+          },
+          "plugins": ["plugins/markdown"],
+          "opts": {
+            "destination": "./docs/",
+            "recurse": true,
+            "readme": "../README.md"
+          },
+          "templates": {
+            "cleverLinks": true,
+            "monospaceLinks": true
+          }
+        }
+        EOL
+        
+        npx jsdoc -c jsdoc.json
+
+    - name: Generate Swagger documentation
+      run: |
+        cd backend
+        cat > swagger.js << 'EOL'
+        const swaggerJsdoc = require('swagger-jsdoc');
+        const fs = require('fs');
+
+        const options = {
+          definition: {
+            openapi: '3.0.0',
+            info: {
+              title: 'SpeedTest API',
+              version: '1.0.0',
+              description: 'API documentation for the SpeedTest application',
+            },
+            servers: [
+              {
+                url: 'http://localhost:3000',
+                description: 'Development server',
+              },
+            ],
+          },
+          apis: ['./server.js', './routes/*.js'],
+        };
+
+        const specs = swaggerJsdoc(options);
+        fs.writeFileSync('./docs/swagger.json', JSON.stringify(specs, null, 2));
+        console.log('Swagger documentation generated');
+        EOL
+        
+        node swagger.js
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./backend/docs
+        destination_dir: api-docs
+
+  frontend-docs:
+    name: Generate Frontend Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        cd project
+        npm ci
+        npm install --save-dev typedoc
+
+    - name: Generate TypeScript documentation
+      run: |
+        cd project
+        npx typedoc --entryPointStrategy expand ./src --out docs
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./project/docs
+        destination_dir: frontend-docs

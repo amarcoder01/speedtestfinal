@@ -1,0 +1,150 @@
+name: Environment Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - development
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+jobs:
+  determine-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      docker_tag: ${{ steps.set-env.outputs.docker_tag }}
+    
+    steps:
+    - name: Set environment based on branch or input
+      id: set-env
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+        else
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=development" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        # Set Docker tag based on environment
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            echo "docker_tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "docker_tag=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+        else
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "docker_tag=latest" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            echo "docker_tag=staging" >> $GITHUB_OUTPUT
+          else
+            echo "docker_tag=dev" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+  build-and-deploy:
+    name: Build and Deploy
+    needs: determine-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        npm ci
+        cd backend && npm ci
+        cd ../project && npm ci
+
+    - name: Set environment variables
+      run: |
+        if [ "${{ needs.determine-environment.outputs.environment }}" == "production" ]; then
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "VITE_API_BASE_URL=${{ secrets.PROD_API_URL }}" >> $GITHUB_ENV
+          echo "ENABLE_CLUSTER=true" >> $GITHUB_ENV
+        elif [ "${{ needs.determine-environment.outputs.environment }}" == "staging" ]; then
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "VITE_API_BASE_URL=${{ secrets.STAGING_API_URL }}" >> $GITHUB_ENV
+          echo "ENABLE_CLUSTER=true" >> $GITHUB_ENV
+        else
+          echo "NODE_ENV=development" >> $GITHUB_ENV
+          echo "VITE_API_BASE_URL=${{ secrets.DEV_API_URL }}" >> $GITHUB_ENV
+          echo "ENABLE_CLUSTER=false" >> $GITHUB_ENV
+        fi
+
+    - name: Build application
+      run: npm run build:all
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKER_USERNAME }}/speedtest:${{ needs.determine-environment.outputs.docker_tag }}
+        build-args: |
+          NODE_ENV=${{ env.NODE_ENV }}
+          VITE_API_BASE_URL=${{ env.VITE_API_BASE_URL }}
+          ENABLE_CLUSTER=${{ env.ENABLE_CLUSTER }}
+        cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/speedtest:buildcache
+        cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/speedtest:buildcache,mode=max
+
+    - name: Deploy to environment
+      run: |
+        echo "Deploying to ${{ needs.determine-environment.outputs.environment }} environment"
+        
+        if [ "${{ needs.determine-environment.outputs.environment }}" == "production" ]; then
+          # Deploy to production (Render)
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_PROD }}"
+          
+        elif [ "${{ needs.determine-environment.outputs.environment }}" == "staging" ]; then
+          # Deploy to staging (Render)
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_STAGING }}"
+          
+        else
+          # Deploy to development (Render)
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_DEV }}"
+        fi
+
+    - name: Notify deployment status
+      if: always()
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_CHANNEL: deployments
+        SLACK_COLOR: ${{ job.status }}
+        SLACK_TITLE: Deployment to ${{ needs.determine-environment.outputs.environment }}
+        SLACK_MESSAGE: 'Status: ${{ job.status }}'
+        SLACK_FOOTER: 'SpeedTest App Deployment'

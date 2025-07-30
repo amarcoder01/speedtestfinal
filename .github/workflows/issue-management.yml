@@ -1,0 +1,117 @@
+name: Issue Management
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled]
+  pull_request:
+    types: [opened, reopened, labeled, unlabeled]
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:
+
+jobs:
+  triage:
+    name: Issue Triage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    
+    steps:
+    - name: Initial triage
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const issue = context.payload.issue;
+          
+          // Add default labels based on title keywords
+          const title = issue.title.toLowerCase();
+          let labels = [];
+          
+          if (title.includes('bug') || title.includes('fix') || title.includes('issue') || title.includes('error')) {
+            labels.push('bug');
+          }
+          
+          if (title.includes('feature') || title.includes('enhancement') || title.includes('add')) {
+            labels.push('enhancement');
+          }
+          
+          if (title.includes('documentation') || title.includes('docs') || title.includes('readme')) {
+            labels.push('documentation');
+          }
+          
+          if (labels.length > 0) {
+            await github.rest.issues.addLabels({
+              issue_number: issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: labels
+            });
+          }
+          
+          // Add welcome comment for new contributors
+          const creator = issue.user.login;
+          const contributors = await github.rest.repos.listContributors({
+            owner: context.repo.owner,
+            repo: context.repo.repo
+          });
+          
+          const isFirstTimeContributor = !contributors.data.some(c => c.login === creator);
+          
+          if (isFirstTimeContributor) {
+            await github.rest.issues.createComment({
+              issue_number: issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Thanks for opening your first issue, @${creator}! 👋 The team will review this soon.`
+            });
+          }
+
+  stale:
+    name: Mark Stale Issues and PRs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - uses: actions/stale@v8
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        stale-issue-message: 'This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs. Thank you for your contributions.'
+        stale-pr-message: 'This pull request has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs. Thank you for your contributions.'
+        stale-issue-label: 'stale'
+        stale-pr-label: 'stale'
+        days-before-stale: 30
+        days-before-close: 7
+        exempt-issue-labels: 'pinned,security,enhancement,bug'
+        exempt-pr-labels: 'pinned,security,work-in-progress'
+
+  project:
+    name: Project Board Management
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'issues' || github.event_name == 'pull_request') && (github.event.action == 'labeled' || github.event.action == 'opened')
+    
+    steps:
+    - name: Move to project board
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          // Note: This is a placeholder script that would need to be updated with your actual project board IDs
+          // GitHub's new project boards (Projects V2) require GraphQL API calls
+          
+          const item = context.payload.issue || context.payload.pull_request;
+          const labels = item.labels.map(label => label.name);
+          
+          console.log(`Processing item #${item.number} with labels: ${labels.join(', ')}`);
+          
+          // Example of how you would add to project board (pseudocode)
+          // This would need to be replaced with actual GraphQL mutations for Projects V2
+          /*
+          if (labels.includes('bug')) {
+            // Add to Bug Tracking project in To Do column
+          } else if (labels.includes('enhancement')) {
+            // Add to Feature Development project in Backlog column
+          }
+          */
+          
+          // For now, just log the action
+          console.log(`Would add item #${item.number} to appropriate project board based on labels`);
